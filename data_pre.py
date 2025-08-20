@@ -4,8 +4,10 @@
 SGCC 预处理（真实标签版）：
 - 输入可以是：
   (A) 包含 [user_id, timestamp, kwh] 的“长表” CSV（或包含多个此类 CSV 的文件夹），或
-  (B) 仅含 [user_id, t1, t2, ...] 的“宽表”矩阵 CSV，其中后续列为按时间顺序排列的用电量。
-  标签可来自单独 CSV (--labels_csv)，格式为 [user_id, label]。
+  (B) 宽表矩阵 CSV，其中后续列为按时间顺序排列的用电量，可包含 user_id 列；若缺失则按行号生成。
+  标签可来自单独 CSV (--labels_csv)，支持两种格式：
+    (a) [user_id,label] 含用户ID列；
+    (b) 仅一列标签，与 feature.csv 行顺序对齐。
 - 输出：data/sgcc_daily_48.npz，包含：
   - daily_kwh: [U, D, 48] 逐用户日48点矩阵（按用户 min–max 归一化；若时间点非48倍数，尾部填0）；
   - users: [U] user_id 列表；
@@ -47,10 +49,18 @@ def read_any(path):
 
 def read_feature_matrix(path):
     df = pd.read_csv(path)
-    if df.shape[1] < 2:
-        raise ValueError("feature matrix must contain user_id and time columns")
-    users = df.iloc[:, 0].tolist()
-    values = df.iloc[:, 1:].astype(float).values
+    if df.empty:
+        raise ValueError("feature matrix CSV is empty")
+    # 若首列是 user_id/uid/customer_id，则其余列为时间点；否则所有列均为时间点
+    first_col = str(df.columns[0]).lower()
+    if first_col in {"user_id", "uid", "customer_id"}:
+        users = df.iloc[:, 0].tolist()
+        values = df.iloc[:, 1:].astype(float).values
+    else:
+        users = [f"user_{i}" for i in range(len(df))]
+        values = df.astype(float).values
+    if values.ndim != 2 or values.shape[1] == 0:
+        raise ValueError("feature matrix must contain at least one time column")
     # per-user min–max normalization
     mn = values.min(axis=1, keepdims=True)
     mx = values.max(axis=1, keepdims=True)
@@ -67,19 +77,29 @@ def read_feature_matrix(path):
     data = values.reshape(len(users), D, 48)
     return users, data
 
-def read_labels(labels_csv, raw_df=None):
+def read_labels(labels_csv, users=None, raw_df=None):
     if labels_csv:
         ldf = pd.read_csv(labels_csv)
-        cols = {c.lower(): c for c in ldf.columns}
+        cols = {str(c).lower(): c for c in ldf.columns}
         uid = cols.get("user_id") or cols.get("uid") or cols.get("customer_id")
         lab = None
         for k in LABEL_CANDIDATES:
             lab = lab or cols.get(k)
-        if not (uid and lab):
-            raise ValueError("labels_csv must have user_id and label column")
-        out = ldf[[uid, lab]].rename(columns={uid:"user_id", lab:"label"})
-        out["label"] = (out["label"].astype(float) > 0.5).astype(int)
-        return out
+        if uid and lab:
+            out = ldf[[uid, lab]].rename(columns={uid: "user_id", lab: "label"})
+            out["label"] = (out["label"].astype(float) > 0.5).astype(int)
+            return out
+        # 若缺少 user_id 列，则按 users 顺序对齐
+        if ldf.shape[1] == 1:
+            labs = (ldf.iloc[:, 0].astype(float) > 0.5).astype(int).values
+        else:
+            # 尝试使用首列作为标签
+            labs = (ldf.iloc[:, 0].astype(float) > 0.5).astype(int).values
+        if users is None:
+            raise ValueError("labels_csv lacks user_id column; supply users list for alignment")
+        if len(labs) != len(users):
+            raise ValueError("labels count does not match number of users")
+        return pd.DataFrame({"user_id": users, "label": labs})
     else:
         # 尝试从原始明细中抓取标签（若存在）→ 聚合到用户级（任意一条为1则该用户为1）
         if raw_df is None:
@@ -150,9 +170,9 @@ def preprocess(input_path: str, out: str, labels_csv: str = None,
     else:
         users, data = read_feature_matrix(input_path)
 
-    lab_df = read_labels(labels_csv)
+    lab_df = read_labels(labels_csv, users)
     if lab_df is None:
-        raise SystemExit("Please provide labels_csv with user_id,label columns")
+        raise SystemExit("Please provide labels_csv")
     lab_map = {r.user_id: int(r.label) for _, r in lab_df.iterrows()}
     user_labels = np.array([lab_map.get(u, 0) for u in users], dtype=np.int64)
 
@@ -165,7 +185,7 @@ def _cli():
     ap = argparse.ArgumentParser()
     ap.add_argument("--in", dest="input_path", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--labels_csv", default=None, help="CSV with [user_id,label]")
+    ap.add_argument("--labels_csv", default=None, help="CSV with [user_id,label] or single label column")
     ap.add_argument("--start", default="2014-01-01")
     ap.add_argument("--end", default="2016-10-31")
     ap.add_argument("--freq", default="30min")
