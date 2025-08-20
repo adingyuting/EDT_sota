@@ -1,5 +1,6 @@
 import argparse, os, random, json
 from typing import List, Tuple
+from types import SimpleNamespace
 import numpy as np
 import torch
 import torch.nn as nn
@@ -272,8 +273,44 @@ def evaluate_ckpt(args):
     f1,auc,rec,fpr = evaluate(model, te, device)
     print(json.dumps({"F1":f1, "AUC":auc, "Recall":rec, "FPR":fpr}, indent=2))
 
-if __name__ == '__main__':
-    import argparse
+
+# ---------------------------------------------------------------------------
+# Convenience wrappers so the training/eval pipeline can be invoked directly
+# from Python code without using the command line interface.
+# ---------------------------------------------------------------------------
+
+def pretrain_main(data: str, out: str, window_len: int = 336, batch_size: int = 64,
+                  epochs: int = 50, mask_ratio: float = 0.3, mask_l0: float = 8.0,
+                  seed: int = 42):
+    args = SimpleNamespace(data=data, out=out, window_len=window_len,
+                           batch_size=batch_size, epochs=epochs,
+                           mask_ratio=mask_ratio, mask_l0=mask_l0, seed=seed)
+    set_seed(seed)
+    train_pretrain(args)
+
+
+def finetune_main(data: str, pretrained: str, out: str, window_len: int = 336,
+                  batch_size: int = 64, epochs1: int = 20, epochs2: int = 80,
+                  labeled_frac: float = 0.10, pos_weight: float = -1.0,
+                  seed: int = 42):
+    args = SimpleNamespace(data=data, pretrained=pretrained, out=out,
+                           window_len=window_len, batch_size=batch_size,
+                           epochs1=epochs1, epochs2=epochs2,
+                           labeled_frac=labeled_frac, pos_weight=pos_weight,
+                           seed=seed)
+    set_seed(seed)
+    train_finetune(args)
+
+
+def eval_main(data: str, ckpt: str, window_len: int = 336, batch_size: int = 128,
+              seed: int = 42):
+    args = SimpleNamespace(data=data, ckpt=ckpt, window_len=window_len,
+                           batch_size=batch_size, seed=seed)
+    set_seed(seed)
+    evaluate_ckpt(args)
+
+
+def _cli():
     p=argparse.ArgumentParser()
     sub=p.add_subparsers(dest='cmd', required=True)
 
@@ -310,3 +347,17 @@ if __name__ == '__main__':
     if args.cmd=='pretrain': train_pretrain(args)
     elif args.cmd=='finetune': train_finetune(args)
     else: evaluate_ckpt(args)
+
+
+if __name__ == '__main__':
+    import sys
+    if len(sys.argv) > 1:
+        _cli()
+    else:
+        # Example direct run; adjust paths and epochs as needed.
+        data_path = 'data/sgcc_daily_48.npz'
+        pre_ckpt = 'pretrain.pth'
+        fin_ckpt = 'finetune.pth'
+        pretrain_main(data_path, pre_ckpt, epochs=1)
+        finetune_main(data_path, pre_ckpt, fin_ckpt, epochs1=1, epochs2=1)
+        eval_main(data_path, fin_ckpt)

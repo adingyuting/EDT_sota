@@ -137,7 +137,31 @@ def build_daily_48(df, start, end, freq="30min", fill="none", drop_threshold=0.2
     data = np.stack(arrs, axis=0)  # [U, D, 48]
     return users, data
 
-if __name__ == "__main__":
+def preprocess(input_path: str, out: str, labels_csv: str = None,
+               start: str = "2014-01-01", end: str = "2016-10-31",
+               freq: str = "30min", fill: str = "none",
+               drop_threshold: float = 0.2):
+    """High level wrapper so this module can be imported and called directly."""
+    preview = pd.read_csv(input_path, nrows=1)
+    cols = [c.lower() for c in preview.columns]
+    if any(c in cols for c in ["timestamp", "time", "datetime"]):
+        df = read_any(input_path)
+        users, data = build_daily_48(df, start, end, freq, fill, drop_threshold)
+    else:
+        users, data = read_feature_matrix(input_path)
+
+    lab_df = read_labels(labels_csv)
+    if lab_df is None:
+        raise SystemExit("Please provide labels_csv with user_id,label columns")
+    lab_map = {r.user_id: int(r.label) for _, r in lab_df.iterrows()}
+    user_labels = np.array([lab_map.get(u, 0) for u in users], dtype=np.int64)
+
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    np.savez_compressed(out, daily_kwh=data, users=np.array(users, dtype=object), user_labels=user_labels)
+    print(f"Saved daily_kwh{data.shape}, labels{user_labels.shape} to {out}")
+
+
+def _cli():
     ap = argparse.ArgumentParser()
     ap.add_argument("--in", dest="input_path", required=True)
     ap.add_argument("--out", required=True)
@@ -148,23 +172,14 @@ if __name__ == "__main__":
     ap.add_argument("--fill", default="none", choices=["none","zero","ffill"])
     ap.add_argument("--drop_threshold", type=float, default=0.2)
     args = ap.parse_args()
+    preprocess(args.input_path, args.out, args.labels_csv,
+               args.start, args.end, args.freq, args.fill, args.drop_threshold)
 
-    preview = pd.read_csv(args.input_path, nrows=1)
-    cols = [c.lower() for c in preview.columns]
-    if any(c in cols for c in ["timestamp", "time", "datetime"]):
-        df = read_any(args.input_path)
-        users, data = build_daily_48(df, args.start, args.end, args.freq, args.fill, args.drop_threshold)
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1:
+        _cli()
     else:
-        users, data = read_feature_matrix(args.input_path)
-
-    # 读取用户级标签
-    lab_df = read_labels(args.labels_csv)
-    if lab_df is None:
-        raise SystemExit("Please provide --labels_csv (user_id,label). Real-label SGCC requires explicit labels.")
-    # 对齐 users 顺序
-    lab_map = {r.user_id: int(r.label) for _, r in lab_df.iterrows()}
-    user_labels = np.array([lab_map.get(u, 0) for u in users], dtype=np.int64)
-
-    os.makedirs(os.path.dirname(args.out), exist_ok=True)
-    np.savez_compressed(args.out, daily_kwh=data, users=np.array(users, dtype=object), user_labels=user_labels)
-    print(f"Saved daily_kwh{data.shape}, labels{user_labels.shape} to {args.out}")
+        # Example direct run; edit the paths below to match your environment.
+        preprocess("data/feature.csv", "data/sgcc_daily_48.npz", labels_csv="data/labels.csv")
