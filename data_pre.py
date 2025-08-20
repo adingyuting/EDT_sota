@@ -2,17 +2,18 @@
 # -*- coding: utf-8 -*-
 """
 SGCC 预处理（真实标签版）：
-- 输入：一个或多个 CSV，至少包含 [user_id, timestamp, kwh]；标签可来自：
-  (A) 同一 CSV 中的列，如 label/is_theft/fraud/class（1=窃电，0=正常），或
-  (B) 另一个 CSV：--labels_csv，包含 [user_id, label]，脚本会 join。
+- 输入可以是：
+  (A) 包含 [user_id, timestamp, kwh] 的“长表” CSV（或包含多个此类 CSV 的文件夹），或
+  (B) 仅含 [user_id, t1, t2, ...] 的“宽表”矩阵 CSV，其中后续列为按时间顺序排列的用电量。
+  标签可来自单独 CSV (--labels_csv)，格式为 [user_id, label]。
 - 输出：data/sgcc_daily_48.npz，包含：
-  - daily_kwh: [U, D, 48] 逐用户日48点矩阵（30min采样，完整日），已做逐用户 min–max 归一化；
+  - daily_kwh: [U, D, 48] 逐用户日48点矩阵（按用户 min–max 归一化；若时间点非48倍数，尾部填0）；
   - users: [U] user_id 列表；
-  - user_labels: [U] 用户级标签（0/1）。若原始为样本级，则按用户聚合（任意一天为窃电即视为1）。
+  - user_labels: [U] 用户级标签（0/1）。
 
 用法示例：
-python sgcc_preprocess_labels.py \
-  --in /path/to/sgcc_csv_or_folder \
+python data_pre.py \
+  --in /path/to/feature_or_long_csv \
   --out data/sgcc_daily_48.npz \
   --start 2014-01-01 --end 2016-10-31 \
   --freq 30min --fill none [--labels_csv /path/to/user_labels.csv]
@@ -43,6 +44,28 @@ def read_any(path):
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True).dt.tz_convert(None)
     df = df.dropna(subset=["timestamp", "kwh", "user_id"]).reset_index(drop=True)
     return df
+
+def read_feature_matrix(path):
+    df = pd.read_csv(path)
+    if df.shape[1] < 2:
+        raise ValueError("feature matrix must contain user_id and time columns")
+    users = df.iloc[:, 0].tolist()
+    values = df.iloc[:, 1:].astype(float).values
+    # per-user min–max normalization
+    mn = values.min(axis=1, keepdims=True)
+    mx = values.max(axis=1, keepdims=True)
+    diff = mx - mn
+    diff[diff < 1e-8] = 1.0
+    values = (values - mn) / diff
+    # pad to multiples of 48
+    T = values.shape[1]
+    pad = (-T) % 48
+    if pad:
+        values = np.pad(values, ((0, 0), (0, pad)), mode="constant")
+        T += pad
+    D = T // 48
+    data = values.reshape(len(users), D, 48)
+    return users, data
 
 def read_labels(labels_csv, raw_df=None):
     if labels_csv:
@@ -126,8 +149,13 @@ if __name__ == "__main__":
     ap.add_argument("--drop_threshold", type=float, default=0.2)
     args = ap.parse_args()
 
-    df = read_any(args.input_path)
-    users, data = build_daily_48(df, args.start, args.end, args.freq, args.fill, args.drop_threshold)
+    preview = pd.read_csv(args.input_path, nrows=1)
+    cols = [c.lower() for c in preview.columns]
+    if any(c in cols for c in ["timestamp", "time", "datetime"]):
+        df = read_any(args.input_path)
+        users, data = build_daily_48(df, args.start, args.end, args.freq, args.fill, args.drop_threshold)
+    else:
+        users, data = read_feature_matrix(args.input_path)
 
     # 读取用户级标签
     lab_df = read_labels(args.labels_csv)
