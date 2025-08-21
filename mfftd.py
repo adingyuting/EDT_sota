@@ -13,7 +13,9 @@ from sklearn.metrics import f1_score, roc_auc_score, recall_score
 
 def set_seed(seed: int = 42):
     random.seed(seed); np.random.seed(seed)
-    torch.manual_seed(seed); torch.cuda.manual_seed_all(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 def minmax_norm(x: np.ndarray, eps=1e-8) -> np.ndarray:
     # x: [U,D,48] already user-normalized in preprocessing; keep as-is or re-normalize per user
