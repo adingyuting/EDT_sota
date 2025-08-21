@@ -3,6 +3,7 @@ from typing import List, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import f1_score, roc_auc_score, recall_score
 
@@ -114,24 +115,49 @@ class HPTELayer(nn.Module):
 class MFFTD(nn.Module):
     def __init__(self, input_dim=1, d=128, heads=8, patch_sizes=[2,3,8], ff_mult=4):
         super().__init__()
+        # time and frequency domain projections
         self.input_proj = nn.Linear(input_dim, d)
+        self.freq_proj = nn.Linear(input_dim, d)
+        # hierarchical layers for time and frequency branches
         self.layers = nn.ModuleList([HPTELayer(d, heads, p, ff_mult) for p in patch_sizes])
+        self.freq_layers = nn.ModuleList([HPTELayer(d, heads, p, ff_mult) for p in patch_sizes])
+        # fusion layers combine time and frequency features at each scale
+        self.fusion_layers = nn.ModuleList([nn.Sequential(nn.Linear(2*d, d), nn.GELU()) for _ in patch_sizes])
         self.d=d; self.patch_sizes=patch_sizes
         self.pretrain_head=None; self.classifier=None
+
     def forward_features(self, x):
+        # x: [B, L] or [B, L, C]
         if x.dim()==2: x=x.unsqueeze(-1)
-        x = self.input_proj(x)
-        for layer in self.layers: x = layer(x)
-        return x
+        # time-domain projection
+        xt = self.input_proj(x)
+        # frequency-domain projection using rFFT magnitude
+        xf = torch.fft.rfft(x, dim=1).abs()
+        # interpolate frequency features to match temporal length
+        xf = F.interpolate(xf.transpose(1,2), size=x.size(1), mode='linear', align_corners=False).transpose(1,2)
+        xf = self.freq_proj(xf)
+
+        for lt, lf, fuse in zip(self.layers, self.freq_layers, self.fusion_layers):
+            xt = lt(xt)
+            xf = lf(xf)
+            fused = fuse(torch.cat([xt, xf], dim=-1))
+            xt = xf = fused
+        return xt
     def _Lf(self, L):
         for p in self.patch_sizes: L//=p
         return L
     def make_pretrain_head(self, L_in): self.pretrain_head = nn.Linear(self._Lf(L_in)*self.d, L_in)
     def make_classifier(self, L_in): self.classifier = nn.Linear(self._Lf(L_in)*self.d, 1)
+
     def forward_pretrain(self, x):
-        B,L = x.shape; feats=self.forward_features(x); return self.pretrain_head(feats.reshape(B,-1))
+        B,L = x.shape
+        fused=self.forward_features(x)
+        return self.pretrain_head(fused.reshape(B,-1))
+
     def forward_classify(self, x):
-        B,L = x.shape; feats=self.forward_features(x); return self.classifier(feats.reshape(B,-1)).squeeze(-1)
+        B,L = x.shape
+        fused=self.forward_features(x)
+        return self.classifier(fused.reshape(B,-1)).squeeze(-1)
 
 ############################################################
 # Train / Eval
@@ -228,7 +254,13 @@ def train_finetune(args):
     bce = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight], device=device))
 
     # Stage-1: freeze FE
-    fe_params = list(model.input_proj.parameters()) + [p for l in model.layers for p in l.parameters()]
+    fe_params = (
+        list(model.input_proj.parameters()) +
+        list(model.freq_proj.parameters()) +
+        [p for l in model.layers for p in l.parameters()] +
+        [p for l in model.freq_layers for p in l.parameters()] +
+        [p for l in model.fusion_layers for p in l.parameters()]
+    )
     for p in fe_params: p.requires_grad=False
     opt1 = torch.optim.Adam(filter(lambda p:p.requires_grad, model.parameters()), lr=1e-3)
 
