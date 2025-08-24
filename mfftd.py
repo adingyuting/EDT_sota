@@ -44,11 +44,21 @@ def ensure_demo_data(path: str, users: int = 10, days: int = 7):
     """
 
     if os.path.exists(path):
-        return
+        data = np.load(path)
+        labels = data.get('user_labels')
+        # If the existing dataset already contains both classes, keep it.
+        if labels is not None and np.unique(labels).size >= 2:
+            return
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
     daily = np.random.rand(users, days, 48).astype(np.float32)
     labels = np.random.randint(0, 2, size=users)
+    # Ensure the synthetic dataset contains at least one normal and one
+    # anomalous user so downstream metrics are well-defined.
+    if labels.sum() == 0:
+        labels[0] = 1
+    elif labels.sum() == len(labels):
+        labels[0] = 0
     np.savez(path, daily_kwh=daily, user_labels=labels)
 
 ############################################################
