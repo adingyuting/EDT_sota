@@ -11,6 +11,16 @@ from sklearn.metrics import f1_score, roc_auc_score, recall_score
 # still locates data/ckpt files correctly.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+
+def resolve_path(path: str) -> str:
+    """Return an absolute path, interpreting ``path`` relative to this file.
+
+    Allow users to supply either absolute or repository-relative paths. This
+    avoids ``FileNotFoundError`` when the script is launched from a different
+    working directory.
+    """
+    return path if os.path.isabs(path) else os.path.join(BASE_DIR, path)
+
 # -----------------------------------------------------------------------------
 # Defaults for running the script without any command line arguments.
 # -----------------------------------------------------------------------------
@@ -227,7 +237,8 @@ def evaluate(model, loader, device):
 
 def train_pretrain(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    data = np.load(args.data, allow_pickle=True)
+    data_path = resolve_path(args.data)
+    data = np.load(data_path, allow_pickle=True)
     daily = data['daily_kwh'].astype(np.float32)
     user_labels = data['user_labels'].astype(int)
     U = daily.shape[0]
@@ -266,13 +277,17 @@ def train_pretrain(args):
         vs/=max(1,c)
         print(f"[Pretrain] {ep+1}/{args.epochs} train_mse={s/max(1,n):.4f} val_mse={vs:.4f}")
         if vs<best:
-            best=vs; os.makedirs(os.path.dirname(args.out), exist_ok=True); torch.save(model.state_dict(), args.out)
+            best=vs
+            out_path = resolve_path(args.out)
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            torch.save(model.state_dict(), out_path)
 
 # Finetune: supervised on real labels (optionally semi-supervised via labeled_frac)
 
 def train_finetune(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    data = np.load(args.data, allow_pickle=True)
+    data_path = resolve_path(args.data)
+    data = np.load(data_path, allow_pickle=True)
     daily = data['daily_kwh'].astype(np.float32)
     user_labels = data['user_labels'].astype(int)
     U = daily.shape[0]
@@ -286,8 +301,9 @@ def train_finetune(args):
     model = MFFTD(d=128, heads=8, patch_sizes=[2,3,8]).to(device)
     model.make_pretrain_head(args.window_len)
     model.make_classifier(args.window_len)
-    if args.pretrained and os.path.exists(args.pretrained):
-        sd=torch.load(args.pretrained, map_location=device); model.load_state_dict(sd, strict=False)
+    pre_path = resolve_path(args.pretrained) if args.pretrained else ''
+    if pre_path and os.path.exists(pre_path):
+        sd=torch.load(pre_path, map_location=device); model.load_state_dict(sd, strict=False)
 
     # compute pos_weight from labeled train set
     y_tr = tr_ds.labels[tr_ds.labels>=0]
@@ -329,19 +345,22 @@ def train_finetune(args):
         print(f"[Stage2] {ep+1}/{args.epochs2} F1={f1:.3f} AUC={auc:.3f} Recall={rec:.3f} FPR={fpr:.3f}")
         if f1>best:
             best=f1
-            os.makedirs(os.path.dirname(args.out), exist_ok=True)
-            torch.save(model.state_dict(), args.out)
+            out_path = resolve_path(args.out)
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            torch.save(model.state_dict(), out_path)
 
     # Ensure a checkpoint is written even if validation F1 never improves
-    if not os.path.exists(args.out):
-        os.makedirs(os.path.dirname(args.out), exist_ok=True)
-        torch.save(model.state_dict(), args.out)
+    final_path = resolve_path(args.out)
+    if not os.path.exists(final_path):
+        os.makedirs(os.path.dirname(final_path), exist_ok=True)
+        torch.save(model.state_dict(), final_path)
 
 # Eval on held-out test users
 
 def evaluate_ckpt(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    data = np.load(args.data, allow_pickle=True)
+    data_path = resolve_path(args.data)
+    data = np.load(data_path, allow_pickle=True)
     daily = data['daily_kwh'].astype(np.float32); user_labels = data['user_labels'].astype(int)
     U = daily.shape[0]
     _, _, te_idx = make_user_splits(U, ratio=(0.8,0.1,0.1))
@@ -349,8 +368,11 @@ def evaluate_ckpt(args):
     te = DataLoader(te_ds, batch_size=args.batch_size, shuffle=False, num_workers=2)
 
     model = MFFTD(d=128, heads=8, patch_sizes=[2,3,8]).to(device)
-    model.make_pretrain_head(args.window_len); model.make_classifier(args.window_len)
-    sd=torch.load(args.ckpt, map_location=device); model.load_state_dict(sd, strict=False)
+    model.make_pretrain_head(args.window_len)
+    model.make_classifier(args.window_len)
+    ckpt_path = resolve_path(args.ckpt)
+    sd=torch.load(ckpt_path, map_location=device)
+    model.load_state_dict(sd, strict=False)
     f1,auc,rec,fpr = evaluate(model, te, device)
     print(json.dumps({"F1":f1, "AUC":auc, "Recall":rec, "FPR":fpr}, indent=2))
 
