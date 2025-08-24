@@ -178,21 +178,40 @@ class MFFTD(nn.Module):
         self.layers = nn.ModuleList([HPTELayer(d, heads, p, ff_mult) for p in patch_sizes])
         self.freq_layers = nn.ModuleList([HPTELayer(d, heads, p, ff_mult) for p in patch_sizes])
         # fusion layers combine time and frequency features at each scale
-        self.fusion_layers = nn.ModuleList([nn.Sequential(nn.Linear(2*d, d), nn.GELU()) for _ in patch_sizes])
-        self.d=d; self.patch_sizes=patch_sizes
-        self.pretrain_head=None; self.classifier=None
+        self.fusion_layers = nn.ModuleList([
+            nn.Sequential(nn.Linear(2 * d, d), nn.GELU()) for _ in patch_sizes
+        ])
+        self.d = d; self.patch_sizes = patch_sizes
+        self.pretrain_head = None; self.classifier = None
 
-    def forward_features(self, x):
-        # x: [B, L] or [B, L, C]
-        if x.dim()==2: x=x.unsqueeze(-1)
-        # time-domain projection
+    def time_freq_decompose(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Return time- and frequency-domain representations of ``x``.
+
+        Parameters
+        ----------
+        x: torch.Tensor
+            Input tensor of shape ``[B, L]`` or ``[B, L, C]``.
+
+        Returns
+        -------
+        (xt, xf): tuple of torch.Tensor
+            ``xt`` is the time-domain projection and ``xf`` is the magnitude
+            spectrum projected back to the temporal resolution.
+        """
+        if x.dim() == 2:
+            x = x.unsqueeze(-1)
+        # time-domain branch
         xt = self.input_proj(x)
-        # frequency-domain projection using rFFT magnitude
+        # frequency-domain branch via rFFT
         xf = torch.fft.rfft(x, dim=1).abs()
-        # interpolate frequency features to match temporal length
-        xf = F.interpolate(xf.transpose(1,2), size=x.size(1), mode='linear', align_corners=False).transpose(1,2)
+        xf = F.interpolate(
+            xf.transpose(1, 2), size=x.size(1), mode="linear", align_corners=False
+        ).transpose(1, 2)
         xf = self.freq_proj(xf)
+        return xt, xf
 
+    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
+        xt, xf = self.time_freq_decompose(x)
         for lt, lf, fuse in zip(self.layers, self.freq_layers, self.fusion_layers):
             xt = lt(xt)
             xf = lf(xf)
