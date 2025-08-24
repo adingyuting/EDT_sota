@@ -308,8 +308,9 @@ def evaluate_ckpt(args):
 
 if __name__ == '__main__':
     import argparse
+    import sys
     p=argparse.ArgumentParser()
-    sub=p.add_subparsers(dest='cmd', required=True)
+    sub=p.add_subparsers(dest='cmd')
 
     a=sub.add_parser('pretrain')
     a.add_argument('--data', required=True)
@@ -340,7 +341,11 @@ if __name__ == '__main__':
     c.add_argument('--batch_size', type=int, default=128)
     c.add_argument('--seed', type=int, default=42)
 
-    args=p.parse_args(); set_seed(args.seed)
+    args=p.parse_args()
+    if args.cmd is None:
+        p.print_help()
+        sys.exit(1)
+    set_seed(args.seed)
     if args.cmd=='pretrain': train_pretrain(args)
     elif args.cmd=='finetune': train_finetune(args)
     else: evaluate_ckpt(args)
