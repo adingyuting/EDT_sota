@@ -178,8 +178,14 @@ class MFFTD(nn.Module):
     def _Lf(self, L):
         for p in self.patch_sizes: L//=p
         return L
-    def make_pretrain_head(self, L_in): self.pretrain_head = nn.Linear(self._Lf(L_in)*self.d, L_in)
-    def make_classifier(self, L_in): self.classifier = nn.Linear(self._Lf(L_in)*self.d, 1)
+
+    def make_pretrain_head(self, L_in):
+        device = next(self.parameters()).device
+        self.pretrain_head = nn.Linear(self._Lf(L_in)*self.d, L_in).to(device)
+
+    def make_classifier(self, L_in):
+        device = next(self.parameters()).device
+        self.classifier = nn.Linear(self._Lf(L_in)*self.d, 1).to(device)
 
     def forward_pretrain(self, x):
         B,L = x.shape
