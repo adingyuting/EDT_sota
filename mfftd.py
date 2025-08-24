@@ -7,12 +7,16 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import f1_score, roc_auc_score, recall_score
 
+# Resolve paths relative to this file so running from other working directories
+# still locates data/ckpt files correctly.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # -----------------------------------------------------------------------------
 # Defaults for running the script without any command line arguments.
 # -----------------------------------------------------------------------------
-DEFAULT_DATA = os.path.join('data', 'demo.npz')
-DEFAULT_PRETRAIN_CKPT = os.path.join('ckpts', 'pretrained.pth')
-DEFAULT_FINETUNE_CKPT = os.path.join('ckpts', 'finetuned.pth')
+DEFAULT_DATA = os.path.join(BASE_DIR, 'data', 'demo.npz')
+DEFAULT_PRETRAIN_CKPT = os.path.join(BASE_DIR, 'ckpts', 'pretrained.pth')
+DEFAULT_FINETUNE_CKPT = os.path.join(BASE_DIR, 'ckpts', 'finetuned.pth')
 
 
 def ensure_demo_data(path: str, users: int = 10, days: int = 7):
@@ -323,7 +327,15 @@ def train_finetune(args):
             opt2.zero_grad(); loss.backward(); opt2.step()
         f1,auc,rec,fpr = evaluate(model, va, device)
         print(f"[Stage2] {ep+1}/{args.epochs2} F1={f1:.3f} AUC={auc:.3f} Recall={rec:.3f} FPR={fpr:.3f}")
-        if f1>best: best=f1; os.makedirs(os.path.dirname(args.out), exist_ok=True); torch.save(model.state_dict(), args.out)
+        if f1>best:
+            best=f1
+            os.makedirs(os.path.dirname(args.out), exist_ok=True)
+            torch.save(model.state_dict(), args.out)
+
+    # Ensure a checkpoint is written even if validation F1 never improves
+    if not os.path.exists(args.out):
+        os.makedirs(os.path.dirname(args.out), exist_ok=True)
+        torch.save(model.state_dict(), args.out)
 
 # Eval on held-out test users
 
