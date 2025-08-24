@@ -7,6 +7,36 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import f1_score, roc_auc_score, recall_score
 
+# -----------------------------------------------------------------------------
+# Defaults for running the script without any command line arguments.
+# -----------------------------------------------------------------------------
+DEFAULT_DATA = os.path.join('data', 'demo.npz')
+DEFAULT_PRETRAIN_CKPT = os.path.join('ckpts', 'pretrained.pth')
+DEFAULT_FINETUNE_CKPT = os.path.join('ckpts', 'finetuned.pth')
+
+
+def ensure_demo_data(path: str, users: int = 10, days: int = 7):
+    """Create a small synthetic dataset so the script can run out-of-the-box.
+
+    Parameters
+    ----------
+    path: str
+        Destination path for the generated ``npz`` file. If the file already
+        exists nothing will be created.
+    users: int
+        Number of synthetic users.
+    days: int
+        Number of days per user (each day has 48 measurements).
+    """
+
+    if os.path.exists(path):
+        return
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    daily = np.random.rand(users, days, 48).astype(np.float32)
+    labels = np.random.randint(0, 2, size=users)
+    np.savez(path, daily_kwh=daily, user_labels=labels)
+
 ############################################################
 # Utils
 ############################################################
@@ -309,8 +339,8 @@ def evaluate_ckpt(args):
 if __name__ == '__main__':
     import argparse
     import sys
-    p=argparse.ArgumentParser()
-    sub=p.add_subparsers(dest='cmd')
+    p = argparse.ArgumentParser()
+    sub = p.add_subparsers(dest='cmd', required=False)
 
     a=sub.add_parser('pretrain')
     a.add_argument('--data', required=True)
@@ -341,11 +371,51 @@ if __name__ == '__main__':
     c.add_argument('--batch_size', type=int, default=128)
     c.add_argument('--seed', type=int, default=42)
 
-    args=p.parse_args()
+    args = p.parse_args()
     if args.cmd is None:
-        p.print_help()
-        sys.exit(1)
-    set_seed(args.seed)
-    if args.cmd=='pretrain': train_pretrain(args)
-    elif args.cmd=='finetune': train_finetune(args)
-    else: evaluate_ckpt(args)
+        # Running without any arguments launches a short demo pipeline
+        ensure_demo_data(DEFAULT_DATA)
+        set_seed()
+
+        pre_args = argparse.Namespace(
+            data=DEFAULT_DATA,
+            out=DEFAULT_PRETRAIN_CKPT,
+            window_len=336,
+            batch_size=64,
+            epochs=1,
+            mask_ratio=0.3,
+            mask_l0=8.0,
+            seed=42,
+        )
+        train_pretrain(pre_args)
+
+        ft_args = argparse.Namespace(
+            data=DEFAULT_DATA,
+            pretrained=DEFAULT_PRETRAIN_CKPT,
+            out=DEFAULT_FINETUNE_CKPT,
+            window_len=336,
+            batch_size=64,
+            epochs1=1,
+            epochs2=1,
+            labeled_frac=0.10,
+            pos_weight=-1.0,
+            seed=42,
+        )
+        train_finetune(ft_args)
+
+        ev_args = argparse.Namespace(
+            data=DEFAULT_DATA,
+            ckpt=DEFAULT_FINETUNE_CKPT,
+            window_len=336,
+            batch_size=128,
+            seed=42,
+        )
+        evaluate_ckpt(ev_args)
+    else:
+        set_seed(args.seed)
+        if args.cmd == 'pretrain':
+            train_pretrain(args)
+        elif args.cmd == 'finetune':
+            train_finetune(args)
+        else:
+            evaluate_ckpt(args)
