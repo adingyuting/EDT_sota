@@ -1,9 +1,8 @@
 import argparse, os, random, json
-from typing import List, Tuple
+from typing import List
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import f1_score, roc_auc_score, recall_score
 
@@ -84,10 +83,22 @@ def windowize(user_days_48: np.ndarray, window_len: int = 336, stride: int = 48)
         out.append(series[s:s+window_len].astype(np.float32))
     return np.stack(out, axis=0)
 
-def make_user_splits(num_users: int, ratio=(0.8, 0.1, 0.1)):
-    idx = np.arange(num_users); np.random.shuffle(idx)
-    a = int(ratio[0]*num_users); b = int(ratio[1]*num_users)
-    return idx[:a], idx[a:a+b], idx[a+b:]
+def make_user_splits(num_users: int, user_labels: np.ndarray, ratio=(0.8, 0.1, 0.1), seed: int = 42):
+    """Stratified split over users so each subset preserves label ratio."""
+    set_seed(seed)
+    pos_idx = np.where(user_labels == 1)[0]
+    neg_idx = np.where(user_labels == 0)[0]
+    np.random.shuffle(pos_idx); np.random.shuffle(neg_idx)
+
+    def _slice(idx: np.ndarray):
+        a = int(ratio[0] * len(idx)); b = int(ratio[1] * len(idx))
+        return idx[:a], idx[a:a+b], idx[a+b:]
+
+    tr_p, va_p, te_p = _slice(pos_idx)
+    tr_n, va_n, te_n = _slice(neg_idx)
+    tr = np.concatenate([tr_p, tr_n]); va = np.concatenate([va_p, va_n]); te = np.concatenate([te_p, te_n])
+    np.random.shuffle(tr); np.random.shuffle(va); np.random.shuffle(te)
+    return tr, va, te
 
 ############################################################
 # Self-supervised masking (for pretraining)
@@ -171,74 +182,51 @@ class HPTELayer(nn.Module):
 class MFFTD(nn.Module):
     def __init__(self, input_dim=1, d=128, heads=8, patch_sizes=[2,3,8], ff_mult=4):
         super().__init__()
-        # time and frequency domain projections
         self.input_proj = nn.Linear(input_dim, d)
-        self.freq_proj = nn.Linear(input_dim, d)
-        # hierarchical layers for time and frequency branches
         self.layers = nn.ModuleList([HPTELayer(d, heads, p, ff_mult) for p in patch_sizes])
-        self.freq_layers = nn.ModuleList([HPTELayer(d, heads, p, ff_mult) for p in patch_sizes])
-        # fusion layers combine time and frequency features at each scale
-        self.fusion_layers = nn.ModuleList([
-            nn.Sequential(nn.Linear(2 * d, d), nn.GELU()) for _ in patch_sizes
-        ])
+        # fuse features from all scales by concatenation
         self.d = d; self.patch_sizes = patch_sizes
         self.pretrain_head = None; self.classifier = None
 
-    def time_freq_decompose(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Return time- and frequency-domain representations of ``x``.
-
-        Parameters
-        ----------
-        x: torch.Tensor
-            Input tensor of shape ``[B, L]`` or ``[B, L, C]``.
-
-        Returns
-        -------
-        (xt, xf): tuple of torch.Tensor
-            ``xt`` is the time-domain projection and ``xf`` is the magnitude
-            spectrum projected back to the temporal resolution.
-        """
+    def forward_features(self, x: torch.Tensor) -> List[torch.Tensor]:
         if x.dim() == 2:
             x = x.unsqueeze(-1)
-        # time-domain branch
-        xt = self.input_proj(x)
-        # frequency-domain branch via rFFT
-        xf = torch.fft.rfft(x, dim=1).abs()
-        xf = F.interpolate(
-            xf.transpose(1, 2), size=x.size(1), mode="linear", align_corners=False
-        ).transpose(1, 2)
-        xf = self.freq_proj(xf)
-        return xt, xf
+        h = self.input_proj(x)
+        feats = []
+        for layer in self.layers:
+            h = layer(h)
+            feats.append(h)
+        return feats
 
-    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
-        xt, xf = self.time_freq_decompose(x)
-        for lt, lf, fuse in zip(self.layers, self.freq_layers, self.fusion_layers):
-            xt = lt(xt)
-            xf = lf(xf)
-            fused = fuse(torch.cat([xt, xf], dim=-1))
-            xt = xf = fused
-        return xt
-    def _Lf(self, L):
-        for p in self.patch_sizes: L//=p
-        return L
+    def _layer_lengths(self, L: int) -> List[int]:
+        lengths = []
+        for p in self.patch_sizes:
+            L //= p
+            lengths.append(L)
+        return lengths
+
+    def _fused_dim(self, L_in: int) -> int:
+        return sum(l * self.d for l in self._layer_lengths(L_in))
 
     def make_pretrain_head(self, L_in):
         device = next(self.parameters()).device
-        self.pretrain_head = nn.Linear(self._Lf(L_in)*self.d, L_in).to(device)
+        self.pretrain_head = nn.Linear(self._fused_dim(L_in), L_in).to(device)
 
     def make_classifier(self, L_in):
         device = next(self.parameters()).device
-        self.classifier = nn.Linear(self._Lf(L_in)*self.d, 1).to(device)
+        self.classifier = nn.Linear(self._fused_dim(L_in), 1).to(device)
 
     def forward_pretrain(self, x):
-        B,L = x.shape
-        fused=self.forward_features(x)
-        return self.pretrain_head(fused.reshape(B,-1))
+        B, L = x.shape
+        feats = self.forward_features(x)
+        flat = torch.cat([f.reshape(B, -1) for f in feats], dim=-1)
+        return self.pretrain_head(flat)
 
     def forward_classify(self, x):
-        B,L = x.shape
-        fused=self.forward_features(x)
-        return self.classifier(fused.reshape(B,-1)).squeeze(-1)
+        B, L = x.shape
+        feats = self.forward_features(x)
+        flat = torch.cat([f.reshape(B, -1) for f in feats], dim=-1)
+        return self.classifier(flat).squeeze(-1)
 
 ############################################################
 # Train / Eval
@@ -271,7 +259,7 @@ def train_pretrain(args):
     daily = data['daily_kwh'].astype(np.float32)
     user_labels = data['user_labels'].astype(int)
     U = daily.shape[0]
-    tr_idx, va_idx, _ = make_user_splits(U, ratio=(0.8,0.2,0.0))
+    tr_idx, va_idx, _ = make_user_splits(U, user_labels, ratio=(0.8,0.2,0.0))
 
     tr_ds = SGCCWindows(daily, user_labels, tr_idx, split='pretrain', window_len=args.window_len, for_pretrain=True, seed=args.seed)
     va_ds = SGCCWindows(daily, user_labels, va_idx, split='train', window_len=args.window_len, for_pretrain=False, seed=args.seed)
@@ -320,7 +308,7 @@ def train_finetune(args):
     daily = data['daily_kwh'].astype(np.float32)
     user_labels = data['user_labels'].astype(int)
     U = daily.shape[0]
-    tr_idx, va_idx, _ = make_user_splits(U, ratio=(0.8,0.2,0.0))
+    tr_idx, va_idx, _ = make_user_splits(U, user_labels, ratio=(0.8,0.2,0.0))
 
     tr_ds = SGCCWindows(daily, user_labels, tr_idx, split='train', window_len=args.window_len, for_pretrain=False, labeled_frac=args.labeled_frac, seed=args.seed)
     va_ds = SGCCWindows(daily, user_labels, va_idx, split='val', window_len=args.window_len, for_pretrain=False, seed=args.seed)
@@ -334,8 +322,10 @@ def train_finetune(args):
     if pre_path and os.path.exists(pre_path):
         sd=torch.load(pre_path, map_location=device); model.load_state_dict(sd, strict=False)
 
-    # compute pos_weight from labeled train set
-    y_tr = tr_ds.labels[tr_ds.labels>=0]
+    # compute pos_weight from full (unsubsampled) train windows for unbiased ratio
+    full_train_ds = SGCCWindows(daily, user_labels, tr_idx, split='train', window_len=args.window_len,
+                                 for_pretrain=False, labeled_frac=1.0, seed=args.seed)
+    y_tr = full_train_ds.labels
     pos = (y_tr==1).sum(); neg = (y_tr==0).sum()
     pos_weight = float(neg/max(1,pos)) if args.pos_weight<=0 else args.pos_weight
     bce = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight], device=device))
@@ -343,10 +333,7 @@ def train_finetune(args):
     # Stage-1: freeze FE
     fe_params = (
         list(model.input_proj.parameters()) +
-        list(model.freq_proj.parameters()) +
-        [p for l in model.layers for p in l.parameters()] +
-        [p for l in model.freq_layers for p in l.parameters()] +
-        [p for l in model.fusion_layers for p in l.parameters()]
+        [p for l in model.layers for p in l.parameters()]
     )
     for p in fe_params: p.requires_grad=False
     opt1 = torch.optim.Adam(filter(lambda p:p.requires_grad, model.parameters()), lr=1e-3)
@@ -392,7 +379,7 @@ def evaluate_ckpt(args):
     data = np.load(data_path, allow_pickle=True)
     daily = data['daily_kwh'].astype(np.float32); user_labels = data['user_labels'].astype(int)
     U = daily.shape[0]
-    _, _, te_idx = make_user_splits(U, ratio=(0.8,0.1,0.1))
+    _, _, te_idx = make_user_splits(U, user_labels, ratio=(0.8,0.1,0.1))
     te_ds = SGCCWindows(daily, user_labels, te_idx, split='test', window_len=args.window_len, seed=args.seed)
     te = DataLoader(te_ds, batch_size=args.batch_size, shuffle=False, num_workers=2)
 
