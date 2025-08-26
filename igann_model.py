@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, roc_auc_score
 
 
 def set_seed(seed: int = 42):
@@ -103,6 +103,7 @@ def train_igann(
     val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
 
     best_f1 = -1.0
+    best_auc = -1.0
     best_state = None
     best_th = 0.5
     wait = 0
@@ -143,13 +144,18 @@ def train_igann(
                 if f1_tmp > f1:
                     f1 = f1_tmp
                     epoch_th = th
+            try:
+                auc = roc_auc_score(y_true, y_score)
+            except Exception:
+                auc = float('nan')
 
         avg_loss = total_loss / max(1, len(train_loader))
         print(
-            f"Epoch {epoch+1}/{max_epochs} - loss: {avg_loss:.4f} - val_f1: {f1:.4f} at th={epoch_th:.2f}"
+            f"Epoch {epoch+1}/{max_epochs} - loss: {avg_loss:.4f} - val_f1: {f1:.4f} - val_auc: {auc:.4f} at th={epoch_th:.2f}"
         )
 
-        if f1 > best_f1:
+        if auc > best_auc:
+            best_auc = auc
             best_f1 = f1
             best_th = epoch_th
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
@@ -162,7 +168,9 @@ def train_igann(
 
     if best_state is not None:
         model.load_state_dict(best_state)
-    print(f"[IGANN] Training complete. Best val F1: {best_f1:.4f} at th={best_th:.2f}")
+    print(
+        f"[IGANN] Training complete. Best val AUC: {best_auc:.4f} (F1={best_f1:.4f}) at th={best_th:.2f}"
+    )
     return model
 
 

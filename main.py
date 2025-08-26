@@ -15,6 +15,7 @@ from feature_extraction import extract_msgvt_features
 from igann_model import train_igann, predict_proba, set_seed
 from sboa_optimizer import sboa_optimize
 from evaluate import compute_metrics
+from sklearn.metrics import roc_auc_score
 
 
 def main():
@@ -24,6 +25,7 @@ def main():
     parser.add_argument('--test-size', type=float, default=0.3)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--balance', action='store_true', help='Apply RN-SMOTE on train only')
+    parser.add_argument('--grid-search', action='store_true', help='Grid search λ_task/λ_bg for best AUC')
     parser.add_argument('--drop-frac', type=float, default=0.1)
     parser.add_argument('--k', type=int, default=5)
     parser.add_argument('--target-ratio', type=float, default=1.0)
@@ -49,17 +51,19 @@ def main():
     print("Splitting train/test...")
     X_tr_raw, X_te_raw, y_tr, y_te = stratified_split(X, y, test_size=args.test_size, random_state=args.seed)
 
-    if args.balance:
-        print("Applying RN-SMOTE...")
-        Xb, yb = apply_rn_smote(X_tr_raw, y_tr, minority_label=1, k=args.k,
-                                drop_frac=args.drop_frac, target_ratio=args.target_ratio,
-                                random_state=args.seed)
-    else:
-        pos_rate = float((y_tr == 1).mean())
-        if pos_rate < 0.1:
-            print(f"WARNING: positive rate {pos_rate:.3f} is low; consider --balance to improve recall")
+    pos_rate = float((y_tr == 1).mean())
+    if args.balance or pos_rate < 0.2:
+        if not args.balance:
+            print(f"Positive rate {pos_rate:.3f} <0.2; applying RN-SMOTE automatically")
         else:
-            print("Skipping RN-SMOTE...")
+            print("Applying RN-SMOTE...")
+        Xb, yb = apply_rn_smote(
+            X_tr_raw, y_tr, minority_label=1, k=args.k,
+            drop_frac=args.drop_frac, target_ratio=args.target_ratio,
+            random_state=args.seed
+        )
+    else:
+        print("Skipping RN-SMOTE...")
         Xb, yb = X_tr_raw, y_tr
 
     if args.rlkf:
@@ -93,12 +97,38 @@ def main():
         X_trn, yb, test_size=0.2, stratify=yb, random_state=args.seed
     )
 
-    print("Training IGANN model...")
-    model = train_igann(
-        X_trn_sub, y_trn_sub, X_val_sub, y_val_sub,
-        lr=args.lr, max_epochs=args.epochs, hidden=args.hidden,
-        lambda_task=lam_task, lambda_bg=lam_bg, patience=args.patience, seed=args.seed
-    )
+    if args.grid_search:
+        print("Grid searching λ_task and λ_bg for best AUC...")
+        grid_lt = [1e-5, 1e-4, 1e-3]
+        grid_lb = [1e-6, 1e-5, 1e-4]
+        best_auc = -1.0
+        best_model = None
+        for lt in grid_lt:
+            for lb in grid_lb:
+                print(f"  trying lt={lt:.1e}, lb={lb:.1e}")
+                m = train_igann(
+                    X_trn_sub, y_trn_sub, X_val_sub, y_val_sub,
+                    lr=args.lr, max_epochs=args.epochs, hidden=args.hidden,
+                    lambda_task=lt, lambda_bg=lb, patience=args.patience, seed=args.seed
+                )
+                val_proba_tmp = predict_proba(m, X_val_sub)
+                auc_tmp = roc_auc_score(y_val_sub, val_proba_tmp)
+                print(f"    val_auc={auc_tmp:.4f}")
+                if auc_tmp > best_auc:
+                    best_auc = auc_tmp
+                    lam_task, lam_bg = lt, lb
+                    best_model = m
+        model = best_model
+        print(
+            f"Chosen λ_task={lam_task:.1e}, λ_bg={lam_bg:.1e} with val_auc={best_auc:.4f}"
+        )
+    else:
+        print("Training IGANN model...")
+        model = train_igann(
+            X_trn_sub, y_trn_sub, X_val_sub, y_val_sub,
+            lr=args.lr, max_epochs=args.epochs, hidden=args.hidden,
+            lambda_task=lam_task, lambda_bg=lam_bg, patience=args.patience, seed=args.seed
+        )
 
     print("Scanning threshold on validation set...")
     val_proba = predict_proba(model, X_val_sub)
