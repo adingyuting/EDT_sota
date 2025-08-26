@@ -1,10 +1,9 @@
-# ============
+# ===========
 # main.py
-# ============
+# ===========
 
 """Pipeline entry: RN-SMOTE → RLKF → MSGVT → IGANN (+SBOA) → Metrics + SHAP"""
 
-# --- file: main.py ---
 from __future__ import annotations
 import os, json, argparse
 import numpy as np
@@ -20,7 +19,7 @@ from evaluate import compute_metrics
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data-dir', type=str, default=r"D:\学术工作\pythonProject\Igann_Etd\data")
+    parser.add_argument('--data-dir', type=str, default=r"D:\\学术工作\\pythonProject\\Igann_Etd\\data")
     parser.add_argument('--out-dir', type=str, default='outputs')
     parser.add_argument('--test-size', type=float, default=0.3)
     parser.add_argument('--seed', type=int, default=42)
@@ -44,60 +43,61 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     set_seed(args.seed)
 
-    # Load
+    print("Loading data...")
     X, y = load_sgcc_csv(args.data_dir)
 
-    # Split first to avoid leakage
+    print("Splitting train/test...")
     X_tr_raw, X_te_raw, y_tr, y_te = stratified_split(X, y, test_size=args.test_size, random_state=args.seed)
 
-    # Balance (train only)
     if args.balance:
-        Xb, yb = apply_rn_smote(X_tr_raw, y_tr, minority_label=1, k=args.k, drop_frac=args.drop_frac, target_ratio=args.target_ratio, random_state=args.seed)
+        print("Applying RN-SMOTE...")
+        Xb, yb = apply_rn_smote(X_tr_raw, y_tr, minority_label=1, k=args.k,
+                                drop_frac=args.drop_frac, target_ratio=args.target_ratio,
+                                random_state=args.seed)
     else:
+        print("Skipping RN-SMOTE...")
         Xb, yb = X_tr_raw, y_tr
 
-    # RLKF cleanup
     if args.rlkf:
+        print("Applying RLKF cleanup...")
         Xb = apply_rlkf(Xb, process_var=args.process_var, obs_var=args.obs_var)
         X_te_proc = apply_rlkf(X_te_raw, process_var=args.process_var, obs_var=args.obs_var)
     else:
+        print("Skipping RLKF cleanup...")
         X_te_proc = X_te_raw
 
-    # MSGVT-like stats
+    print("Extracting MSGVT features...")
     X_tr_feat = extract_msgvt_features(Xb, use_wavelet=args.use_wavelet)
     X_te_feat = extract_msgvt_features(X_te_proc, use_wavelet=args.use_wavelet)
 
-    # Normalize features (z-score fit on train)
+    print("Normalizing features...")
     mu = X_tr_feat.mean(axis=0)
     sigma = X_tr_feat.std(axis=0) + 1e-12
     X_trn = (X_tr_feat - mu) / sigma
     X_ten = (X_te_feat - mu) / sigma
 
-    # Train IGANN (+ optional SBOA)
-    # Train IGANN (+ optional SBOA)
     lam_task, lam_bg = args.lambda_task, args.lambda_bg
     if args.sboa:
+        print("Running SBOA hyperparameter search...")
         lam_task, lam_bg = sboa_optimize(
             X_trn, yb, hidden=args.hidden, lr=args.lr,
             max_epochs=100, iterations=20, pop_size=16, seed=args.seed
         )
 
-    # ====== 划一小块验证集用于阈值选择（不泄露测试集）======
     from sklearn.model_selection import train_test_split
     X_trn_sub, X_val_sub, y_trn_sub, y_val_sub = train_test_split(
         X_trn, yb, test_size=0.2, stratify=yb, random_state=args.seed
     )
 
+    print("Training IGANN model...")
     model = train_igann(
         X_trn_sub, y_trn_sub, X_val_sub, y_val_sub,
         lr=args.lr, max_epochs=args.epochs, hidden=args.hidden,
         lambda_task=lam_task, lambda_bg=lam_bg, patience=args.patience, seed=args.seed
     )
 
-    # ====== 在验证集上扫阈值，最大化 F1（或 Youden J）======
-    from igann_model import predict_proba
+    print("Scanning threshold on validation set...")
     val_proba = predict_proba(model, X_val_sub)
-
     best_th, best_f1 = 0.5, -1.0
     for th in np.linspace(0.05, 0.95, 19):
         mets = compute_metrics(y_val_sub, val_proba, threshold=th)
@@ -105,11 +105,10 @@ def main():
             best_f1 = mets['f1']
             best_th = th
 
-    # ====== 用最佳阈值在测试集评测 ======
+    print("Evaluating on test set...")
     te_proba = predict_proba(model, X_ten)
     metrics = compute_metrics(y_te, te_proba, threshold=best_th)
 
-    # 保存与打印
     with open(os.path.join(args.out_dir, 'metrics.json'), 'w') as f:
         json.dump({**{k: (float(v) if not isinstance(v, (int, str)) else v) for k, v in metrics.items()},
                    "best_threshold": float(best_th),
@@ -131,3 +130,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

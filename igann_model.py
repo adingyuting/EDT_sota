@@ -101,8 +101,10 @@ def train_igann(
     best_state = None
     wait = 0
 
+    print("[IGANN] Start training...")
     for epoch in range(max_epochs):
         model.train()
+        total_loss = 0.0
         for xb, yb in train_loader:
             xb, yb = xb.to(device), yb.to(device)
             logits = model(xb)
@@ -114,6 +116,7 @@ def train_igann(
             opt.zero_grad()
             loss.backward()
             opt.step()
+            total_loss += loss.item()
 
         # 验证：以 F1 作为早停指标（默认阈值先用 0.5）
         model.eval()
@@ -128,6 +131,9 @@ def train_igann(
             y_true = np.concatenate(gts)
             f1 = f1_score(y_true, y_pred, zero_division=0)
 
+        avg_loss = total_loss / max(1, len(train_loader))
+        print(f"Epoch {epoch+1}/{max_epochs} - loss: {avg_loss:.4f} - val_f1: {f1:.4f}")
+
         if f1 > best_f1:
             best_f1 = f1
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
@@ -135,10 +141,12 @@ def train_igann(
         else:
             wait += 1
             if wait >= patience:
+                print("Early stopping triggered.")
                 break
 
     if best_state is not None:
         model.load_state_dict(best_state)
+    print(f"[IGANN] Training complete. Best val F1: {best_f1:.4f}")
     return model
 
 
