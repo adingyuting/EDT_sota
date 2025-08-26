@@ -55,7 +55,11 @@ def main():
                                 drop_frac=args.drop_frac, target_ratio=args.target_ratio,
                                 random_state=args.seed)
     else:
-        print("Skipping RN-SMOTE...")
+        pos_rate = float((y_tr == 1).mean())
+        if pos_rate < 0.1:
+            print(f"WARNING: positive rate {pos_rate:.3f} is low; consider --balance to improve recall")
+        else:
+            print("Skipping RN-SMOTE...")
         Xb, yb = X_tr_raw, y_tr
 
     if args.rlkf:

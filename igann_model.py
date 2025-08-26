@@ -104,6 +104,7 @@ def train_igann(
 
     best_f1 = -1.0
     best_state = None
+    best_th = 0.5
     wait = 0
 
     print("[IGANN] Start training...")
@@ -123,24 +124,34 @@ def train_igann(
             opt.step()
             total_loss += loss.item()
 
-        # 验证：以 F1 作为早停指标（默认阈值先用 0.5）
+        # 验证：扫描不同阈值寻找最佳 F1 作为早停指标
         model.eval()
         with torch.no_grad():
-            preds, gts = [], []
+            scores, labels = [], []
             for xb, yb in val_loader:
                 xb = xb.to(device)
                 proba = torch.sigmoid(model(xb)).cpu().numpy()
-                preds.append((proba >= 0.5).astype(int))
-                gts.append(yb.numpy().astype(int))
-            y_pred = np.concatenate(preds)
-            y_true = np.concatenate(gts)
-            f1 = f1_score(y_true, y_pred, zero_division=0)
+                scores.append(proba)
+                labels.append(yb.numpy().astype(int))
+            y_score = np.concatenate(scores)
+            y_true = np.concatenate(labels)
+            f1 = -1.0
+            epoch_th = 0.5
+            for th in np.linspace(0.05, 0.95, 19):
+                pred = (y_score >= th).astype(int)
+                f1_tmp = f1_score(y_true, pred, zero_division=0)
+                if f1_tmp > f1:
+                    f1 = f1_tmp
+                    epoch_th = th
 
         avg_loss = total_loss / max(1, len(train_loader))
-        print(f"Epoch {epoch+1}/{max_epochs} - loss: {avg_loss:.4f} - val_f1: {f1:.4f}")
+        print(
+            f"Epoch {epoch+1}/{max_epochs} - loss: {avg_loss:.4f} - val_f1: {f1:.4f} at th={epoch_th:.2f}"
+        )
 
         if f1 > best_f1:
             best_f1 = f1
+            best_th = epoch_th
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             wait = 0
         else:
@@ -151,7 +162,7 @@ def train_igann(
 
     if best_state is not None:
         model.load_state_dict(best_state)
-    print(f"[IGANN] Training complete. Best val F1: {best_f1:.4f}")
+    print(f"[IGANN] Training complete. Best val F1: {best_f1:.4f} at th={best_th:.2f}")
     return model
 
 
