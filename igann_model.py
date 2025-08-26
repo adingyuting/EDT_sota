@@ -82,6 +82,11 @@ def train_igann(
 ):
     set_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # Sanitize inputs to avoid NaNs during loss computation
+    X_train = np.nan_to_num(X_train, nan=0.0, posinf=0.0, neginf=0.0)
+    X_val = np.nan_to_num(X_val, nan=0.0, posinf=0.0, neginf=0.0)
+
     model = IGANN(n_features=X_train.shape[1], hidden=hidden).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
 

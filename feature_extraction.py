@@ -44,11 +44,14 @@ def msgvt_stats_for_series(x: np.ndarray, use_wavelet: bool = True) -> np.ndarra
     mean = float(np.nanmean(sig))
     var = float(np.nanvar(sig, ddof=1)) if sig.size > 1 else 0.0
     kur = float(kurtosis(sig, fisher=False, nan_policy='omit')) if sig.size > 3 else 3.0
+    if np.isnan(kur):
+        kur = 3.0
     corr = _lag1_autocorr(sig)
     contrast = float(np.nanstd(sig, ddof=1)) if sig.size > 1 else 0.0
-    return np.array([ent, mean, var, kur, corr, contrast], dtype=float)
+    feats = np.array([ent, mean, var, kur, corr, contrast], dtype=float)
+    return np.nan_to_num(feats, nan=0.0, posinf=0.0, neginf=0.0)
 
 
 def extract_msgvt_features(X: np.ndarray, use_wavelet: bool = True) -> np.ndarray:
     feats = np.vstack([msgvt_stats_for_series(row, use_wavelet=use_wavelet) for row in X])
-    return feats
+    return np.nan_to_num(feats, nan=0.0, posinf=0.0, neginf=0.0)
