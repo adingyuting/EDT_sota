@@ -7,7 +7,7 @@ from .data import load_sgcc_csv, train_test_split_stratified, standardize_per_se
 from .sldi import SLDIImputer
 from .vmd_features import batch_vmd
 from .ram_bigru import build_ram_bigru_model
-from .metrics import binary_metrics, multiclass_metrics
+from .metrics import binary_metrics
 
 def set_seed(seed: int = 42):
     import random
@@ -81,41 +81,49 @@ def train_binary_sgcc(
     return met
 
 def main():
-    parser = argparse.ArgumentParser(description="ETDS (SLDI + VMD + RAM-BiGRU + Adamax) Reproduction")
-    sub = parser.add_subparsers(dest="task", required=True)
-
-    p_bin = sub.add_parser("sgcc_binary", help="Binary classification on SGCC-like CSVs")
-    p_bin.add_argument("--features", type=str, required=True, help="Path to feature.csv  (N x T)")
-    p_bin.add_argument("--labels", type=str, required=True, help="Path to label.csv    (N,) 0/1")
-    p_bin.add_argument("--outdir", type=str, default="./outputs_sgcc")
-    p_bin.add_argument("--test-size", type=float, default=0.3)
-    p_bin.add_argument("--vmd-K", type=int, default=6)
-    p_bin.add_argument("--attn-units", type=int, default=32)
-    p_bin.add_argument("--bigru-units", type=int, default=64)
-    p_bin.add_argument("--reg-weight", type=float, default=1e-3)
-    p_bin.add_argument("--epochs", type=int, default=100)
-    p_bin.add_argument("--batch-size", type=int, default=64)
-    p_bin.add_argument("--lr", type=float, default=1e-3)
-    p_bin.add_argument("--seed", type=int, default=42)
+    parser = argparse.ArgumentParser(
+        description="ETDS (SLDI + VMD + RAM-BiGRU + Adamax) Reproduction"
+    )
+    parser.add_argument(
+        "--features",
+        type=str,
+        default="./data/features.csv",
+        help="Path to feature.csv  (N x T)",
+    )
+    parser.add_argument(
+        "--labels",
+        type=str,
+        default="./data/labels.csv",
+        help="Path to label.csv    (N,) 0/1",
+    )
+    parser.add_argument("--outdir", type=str, default="./outputs_sgcc")
+    parser.add_argument("--test-size", type=float, default=0.3)
+    parser.add_argument("--vmd-K", type=int, default=6)
+    parser.add_argument("--attn-units", type=int, default=32)
+    parser.add_argument("--bigru-units", type=int, default=64)
+    parser.add_argument("--reg-weight", type=float, default=1e-3)
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--seed", type=int, default=42)
 
     args = parser.parse_args()
 
-    if args.task == "sgcc_binary":
-        met = train_binary_sgcc(
-            feature_csv=args.features,
-            label_csv=args.labels,
-            outdir=args.outdir,
-            test_size=args.test_size,
-            vmd_K=args.vmd_K,
-            attn_units=args.attn_units,
-            bigru_units=args.bigru_units,
-            reg_weight=args.reg_weight,
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            lr=args.lr,
-            seed=args.seed,
-        )
-        print(json.dumps(met, indent=2))
+    met = train_binary_sgcc(
+        feature_csv=args.features,
+        label_csv=args.labels,
+        outdir=args.outdir,
+        test_size=args.test_size,
+        vmd_K=args.vmd_K,
+        attn_units=args.attn_units,
+        bigru_units=args.bigru_units,
+        reg_weight=args.reg_weight,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        seed=args.seed,
+    )
+    print(json.dumps(met, indent=2))
 
 if __name__ == "__main__":
     main()
