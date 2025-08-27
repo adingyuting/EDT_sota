@@ -104,6 +104,12 @@ class BinaryMetricsCallback(tf.keras.callbacks.Callback):
         self.top_k = top_k
         self.epoch = 0
 
+    def on_train_begin(self, logs=None):
+        print("BinaryMetricsCallback: starting training")
+
+    def on_epoch_begin(self, epoch, logs=None):
+        print(f"BinaryMetricsCallback: epoch {epoch + 1} begin")
+
     def on_epoch_end(self, epoch, logs=None):
         self.epoch += 1
         X_val, y_val = self.val_data
@@ -115,6 +121,9 @@ class BinaryMetricsCallback(tf.keras.callbacks.Callback):
             f"FPR={met['FPR']:.4f}  map{self.top_k}={met[f'map{self.top_k}']:.4f}  "
             f"AUC={met['AUC']:.4f}  F1={met['F1']:.4f}"
         )
+
+    def on_train_end(self, logs=None):
+        print("BinaryMetricsCallback: training complete")
 
 def multiclass_metrics(y_true, y_pred) -> Dict[str, float]:
     out = {

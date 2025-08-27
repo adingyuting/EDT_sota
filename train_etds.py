@@ -37,18 +37,22 @@ def train_binary_sgcc(
     os.makedirs(outdir, exist_ok=True)
     set_seed(seed)
 
-    # 1) Load
+    print("[1/9] Loading CSV features and labels ...")
     X, y = load_sgcc_csv(feature_csv, label_csv)
-    # 2) Impute missing by SLDI
+    print(f"    Loaded X{X.shape}, y{y.shape}")
+
+    print("[2/9] Imputing missing values with SLDI ...")
     sldi = SLDIImputer(max_iter=500, random_state=seed)
     X_imp = sldi.fit_transform(X)
-    # 3) Standardize per series
+
+    print("[3/9] Standardizing per series ...")
     X_imp = standardize_per_series(X_imp)
-    # 4) VMD feature extraction
+
+    print("[4/9] Extracting VMD features ...")
     modes = batch_vmd(X_imp, K=vmd_K)    # (N, K, T)
     X_tensor = make_tensor_data_from_modes(modes, stack=True)  # (N, T, 4)
 
-    # 5) Split train/test and further split train/val
+    print("[5/9] Splitting train/test/validation sets ...")
     Xtr_full, Xte, ytr_full, yte = train_test_split_stratified(
         X_tensor, y, test_size=test_size, random_state=seed
     )
@@ -59,12 +63,12 @@ def train_binary_sgcc(
     M = Xtr.shape[2]
     n_classes = 2
 
-    # 6) Build model (RAM + BiGRU)
+    print("[6/9] Building RAM-BiGRU model ...")
     model = build_ram_bigru_model(T=T, M=M, n_classes=n_classes, attn_units=attn_units, reg_weight=reg_weight, bigru_units=bigru_units)
     opt = tf.keras.optimizers.Adamax(learning_rate=lr)
     model.compile(optimizer=opt, loss="sparse_categorical_crossentropy", metrics=["accuracy"])
 
-    # 7) Train
+    print("[7/9] Training ...")
     callbacks = [
         EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True),
         ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=5, min_lr=1e-5),
@@ -81,14 +85,15 @@ def train_binary_sgcc(
         verbose=2,
     )
     train_time = time.time() - t0
+    print(f"    Training finished in {train_time:.2f} sec")
 
-    # 8) Evaluate
+    print("[8/9] Evaluating on test set ...")
     prob = model.predict(Xte, batch_size=batch_size, verbose=0)
     y_prob = prob[:, 1]
     met = binary_metrics(yte, y_prob)
     met["ElapsedTime_sec"] = float(train_time)
 
-    # 9) Save
+    print("[9/9] Saving artifacts to", outdir)
     with open(os.path.join(outdir, "metrics.json"), "w") as f:
         json.dump(met, f, indent=2)
     model.save(os.path.join(outdir, "ram_bigru_tf"))
