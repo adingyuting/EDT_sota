@@ -2,7 +2,13 @@
 # main.py
 # ===========
 
-"""Train IGANN across multiple train/test splits and report metrics."""
+"""Train models across multiple train/test splits and report metrics.
+
+Supports the original IGANN pipeline as well as a simple 1D CNN baseline
+that operates directly on the cleaned time-series. The CNN option allows
+experiments with a higher-capacity model that typically reaches higher
+AUC (≈0.78) on this task.
+"""
 
 from __future__ import annotations
 import os, json, argparse
@@ -12,6 +18,7 @@ from rn_smote import apply_rn_smote
 from rlkf import apply_rlkf
 from feature_extraction import extract_msgvt_features
 from igann_model import train_igann, set_seed
+from cnn_model import train_cnn
 
 
 def main():
@@ -35,6 +42,8 @@ def main():
     parser.add_argument('--patience', type=int, default=20)
     parser.add_argument('--lambda-task', type=float, default=1e-4)
     parser.add_argument('--lambda-bg', type=float, default=1e-5)
+    parser.add_argument('--model', type=str, default='igann', choices=['igann', 'cnn'],
+                        help='Choose model: igann or cnn baseline')
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -78,25 +87,40 @@ def main():
             print("Skipping RN-SMOTE...")
             X_tr_bal, y_tr_bal = X_tr_proc, y_tr
 
-        print("Extracting MSGVT features...")
-        X_tr_feat = extract_msgvt_features(X_tr_bal, use_wavelet=args.use_wavelet)
-        X_val_feat = extract_msgvt_features(X_val_proc, use_wavelet=args.use_wavelet)
-        X_te_feat  = extract_msgvt_features(X_te_proc,  use_wavelet=args.use_wavelet)
+        if args.model == 'igann':
+            print("Extracting MSGVT features...")
+            X_tr_feat = extract_msgvt_features(X_tr_bal, use_wavelet=args.use_wavelet)
+            X_val_feat = extract_msgvt_features(X_val_proc, use_wavelet=args.use_wavelet)
+            X_te_feat  = extract_msgvt_features(X_te_proc,  use_wavelet=args.use_wavelet)
 
-        print("Normalizing features...")
-        mu = X_tr_feat.mean(axis=0)
-        sigma = X_tr_feat.std(axis=0) + 1e-12
-        X_trn = (X_tr_feat - mu) / sigma
-        X_valn = (X_val_feat - mu) / sigma
-        X_ten  = (X_te_feat  - mu) / sigma
+            print("Normalizing features...")
+            mu = X_tr_feat.mean(axis=0)
+            sigma = X_tr_feat.std(axis=0) + 1e-12
+            X_trn = (X_tr_feat - mu) / sigma
+            X_valn = (X_val_feat - mu) / sigma
+            X_ten  = (X_te_feat  - mu) / sigma
 
-        print("Training IGANN model...")
-        model, metrics = train_igann(
-            X_trn, y_tr_bal, X_valn, y_val, X_ten, y_te,
-            lr=args.lr, max_epochs=args.epochs, hidden=args.hidden,
-            lambda_task=args.lambda_task, lambda_bg=args.lambda_bg,
-            patience=args.patience, seed=args.seed
-        )
+            print("Training IGANN model...")
+            model, metrics = train_igann(
+                X_trn, y_tr_bal, X_valn, y_val, X_ten, y_te,
+                lr=args.lr, max_epochs=args.epochs, hidden=args.hidden,
+                lambda_task=args.lambda_task, lambda_bg=args.lambda_bg,
+                patience=args.patience, seed=args.seed
+            )
+        else:
+            print("Normalizing sequences...")
+            mu = X_tr_bal.mean(axis=0, keepdims=True)
+            sigma = X_tr_bal.std(axis=0, keepdims=True) + 1e-12
+            X_trn = (X_tr_bal - mu) / sigma
+            X_valn = (X_val_proc - mu) / sigma
+            X_ten  = (X_te_proc  - mu) / sigma
+
+            print("Training CNN model...")
+            model, metrics = train_cnn(
+                X_trn, y_tr_bal, X_valn, y_val, X_ten, y_te,
+                lr=args.lr, max_epochs=args.epochs,
+                patience=args.patience, seed=args.seed
+            )
 
         print("=== Best Metrics (Test) ===")
         for k, v in metrics.items():
