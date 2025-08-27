@@ -38,11 +38,15 @@ from sklearn.model_selection import train_test_split
 
 
 def load_sgcc_csv(data_dir: str) -> tuple[np.ndarray, np.ndarray]:
-    # 使用绝对路径
-    data_dir = os.path.abspath(data_dir)
+    """Load feature and label CSVs from ``data_dir``.
 
-    X = pd.read_csv(r'D:\学术工作\pythonProject\Igann_Etd\data\features.csv').values
-    y_df = pd.read_csv(r'D:\学术工作\pythonProject\Igann_Etd\data\label.csv')
+    This replaces the previously hard-coded absolute paths so the loader
+    works in any environment as long as ``features.csv`` and ``label.csv``
+    are present in ``data_dir``.
+    """
+    data_dir = os.path.abspath(data_dir)
+    X = pd.read_csv(os.path.join(data_dir, 'features.csv')).values
+    y_df = pd.read_csv(os.path.join(data_dir, 'label.csv'))
     y = y_df.values.squeeze()
     if y.ndim != 1:
         y = y.reshape(-1)
