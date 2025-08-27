@@ -35,6 +35,10 @@ def main():
     parser.add_argument('--patience', type=int, default=20)
     parser.add_argument('--lambda-task', type=float, default=1e-4)
     parser.add_argument('--lambda-bg', type=float, default=1e-5)
+    parser.add_argument('--dropout', type=float, default=0.0,
+                        help='Dropout rate for IGANN subnets')
+    parser.add_argument('--weight-decay', type=float, default=0.0,
+                        help='L2 weight decay for optimizer')
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -90,8 +94,10 @@ def main():
         model, metrics = train_igann(
             X_trn, yb, X_ten, y_te,
             lr=args.lr, max_epochs=args.epochs, hidden=args.hidden,
+            dropout=args.dropout,
             lambda_task=args.lambda_task, lambda_bg=args.lambda_bg,
-            patience=args.patience, seed=args.seed
+            patience=args.patience, seed=args.seed,
+            weight_decay=args.weight_decay
         )
 
         print("=== Best Metrics (Test) ===")
