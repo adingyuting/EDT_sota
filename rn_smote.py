@@ -50,11 +50,11 @@ def apply_rn_smote(
     minority_label: int = 1,
     k: int = 5,
     drop_frac: float = 0.1,
-    target_ratio: float = 1.0,
+    target_ratio: float = 0.7,
     random_state: int = 42,
 ):
     """Apply Reduced-Noise SMOTE.
-    target_ratio = desired minority/majority count ratio after oversampling (≤1 for undersample majority? here we oversample minority to match ratio).
+    target_ratio = desired minority/majority count ratio after oversampling.
     """
     Xp, yp = _drop_noisy_minority(X, y, minority_label, k=k, drop_frac=drop_frac)
     # Compute sampling strategy for SMOTE

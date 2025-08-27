@@ -24,7 +24,8 @@ def main():
     parser.add_argument('--balance', action='store_true', help='Apply RN-SMOTE on train only')
     parser.add_argument('--drop-frac', type=float, default=0.1)
     parser.add_argument('--k', type=int, default=5)
-    parser.add_argument('--target-ratio', type=float, default=1.0)
+    parser.add_argument('--target-ratio', type=float, default=0.7,
+                        help='Desired minority/majority ratio after RN-SMOTE')
     parser.add_argument('--rlkf', action='store_true', help='Apply RLKF cleanup')
     parser.add_argument('--process-var', type=float, default=0.05)
     parser.add_argument('--obs-var', type=float, default=0.1)
@@ -35,10 +36,10 @@ def main():
     parser.add_argument('--patience', type=int, default=20)
     parser.add_argument('--lambda-task', type=float, default=1e-4)
     parser.add_argument('--lambda-bg', type=float, default=1e-5)
-    parser.add_argument('--dropout', type=float, default=0.0,
+    parser.add_argument('--dropout', type=float, default=0.3,
                         help='Dropout rate for IGANN subnets')
-    parser.add_argument('--weight-decay', type=float, default=0.0,
-                        help='L2 weight decay for optimizer')
+    parser.add_argument('--weight-decay', type=float, default=1e-4,
+                        help='Weight decay (AdamW)')
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)

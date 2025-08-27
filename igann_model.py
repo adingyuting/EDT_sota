@@ -101,12 +101,12 @@ def train_igann(
     max_epochs: int = 200,
     batch_size: int = 128,
     hidden: int = 16,
-    dropout: float = 0.0,
+    dropout: float = 0.3,
     lambda_task: float = 1e-4,  # L1 on linear
     lambda_bg: float = 1e-5,    # L2 on subnets
     seed: int = 42,
     patience: int = 20,
-    weight_decay: float = 0.0,
+    weight_decay: float = 1e-4,
 ):
     set_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -115,7 +115,7 @@ def train_igann(
     X_test  = np.nan_to_num(X_test,  nan=0.0, posinf=0.0, neginf=0.0)
 
     model = IGANN(n_features=X_train.shape[1], hidden=hidden, dropout=dropout).to(device)
-    opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         opt, mode='max', factor=0.5, patience=5, min_lr=1e-5
     )
