@@ -3,11 +3,16 @@ import os, time, json, argparse
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
-from .data import load_sgcc_csv, train_test_split_stratified, standardize_per_series, make_tensor_data_from_modes
+from .data import (
+    load_sgcc_csv,
+    train_test_split_stratified,
+    standardize_per_series,
+    make_tensor_data_from_modes,
+)
 from .sldi import SLDIImputer
 from .vmd_features import batch_vmd
 from .ram_bigru import build_ram_bigru_model
-from .metrics import binary_metrics
+from .metrics import binary_metrics, BinaryMetricsCallback
 
 def set_seed(seed: int = 42):
     import random
@@ -43,8 +48,13 @@ def train_binary_sgcc(
     modes = batch_vmd(X_imp, K=vmd_K)    # (N, K, T)
     X_tensor = make_tensor_data_from_modes(modes, stack=True)  # (N, T, 4)
 
-    # 5) Split
-    Xtr, Xte, ytr, yte = train_test_split_stratified(X_tensor, y, test_size=test_size, random_state=seed)
+    # 5) Split train/test and further split train/val
+    Xtr_full, Xte, ytr_full, yte = train_test_split_stratified(
+        X_tensor, y, test_size=test_size, random_state=seed
+    )
+    Xtr, Xval, ytr, yval = train_test_split_stratified(
+        Xtr_full, ytr_full, test_size=0.2, random_state=seed
+    )
     T = Xtr.shape[1]
     M = Xtr.shape[2]
     n_classes = 2
@@ -58,10 +68,17 @@ def train_binary_sgcc(
     callbacks = [
         EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True),
         ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=5, min_lr=1e-5),
+        BinaryMetricsCallback(val_data=(Xval, yval)),
     ]
     t0 = time.time()
     hist = model.fit(
-        Xtr, ytr, validation_split=0.2, epochs=epochs, batch_size=batch_size, callbacks=callbacks, verbose=2
+        Xtr,
+        ytr,
+        validation_data=(Xval, yval),
+        epochs=epochs,
+        batch_size=batch_size,
+        callbacks=callbacks,
+        verbose=2,
     )
     train_time = time.time() - t0
 

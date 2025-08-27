@@ -1,6 +1,7 @@
 
 import numpy as np
 import pandas as pd
+import tensorflow as tf
 from sklearn.metrics import (
     precision_recall_curve,
     roc_auc_score,
@@ -92,6 +93,28 @@ def binary_metrics(y_true: np.ndarray, y_prob: np.ndarray, top_k: int = 40) -> D
         "AUC": float(auc),
         "F1": float(f1),
     }
+
+
+class BinaryMetricsCallback(tf.keras.callbacks.Callback):
+    """Keras callback printing binary metrics on validation data after each epoch."""
+
+    def __init__(self, val_data, top_k: int = 40):
+        super().__init__()
+        self.val_data = val_data
+        self.top_k = top_k
+        self.epoch = 0
+
+    def on_epoch_end(self, epoch, logs=None):
+        self.epoch += 1
+        X_val, y_val = self.val_data
+        y_prob = self.model.predict(X_val, verbose=0)[:, 1]
+        met = binary_metrics(y_val, y_prob, top_k=self.top_k)
+        print(
+            f"Epoch {self.epoch:02d} | Thr={met['Thr']:.3f} | "
+            f"ACC={met['ACC']:.4f}  PRE={met['PRE']:.4f}  RE={met['RE']:.4f}  "
+            f"FPR={met['FPR']:.4f}  map{self.top_k}={met[f'map{self.top_k}']:.4f}  "
+            f"AUC={met['AUC']:.4f}  F1={met['F1']:.4f}"
+        )
 
 def multiclass_metrics(y_true, y_pred) -> Dict[str, float]:
     out = {
