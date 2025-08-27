@@ -3,14 +3,12 @@
 # ========================
 
 """MSGVT-inspired statistical feature extraction.
-For each time series we compute classical statistics plus
 
-- Wavelet band energies to retain coarse-to-fine spectral information
-- Rolling-window statistics to capture local variation
-
-The final feature vector contains:
-Entropy, Mean, Variance, Kurtosis, lag-1 Autocorrelation, Contrast,
-band energies for each wavelet level, rolling mean std, rolling std mean.
+The feature set strictly follows the six statistics used in the paper:
+Entropy, Mean, Variance, Kurtosis, lag-1 Autocorrelation and Contrast.
+Optionally, the raw signal is first projected onto a wavelet basis
+(``db4`` up to level 4) before computing the statistics, but no
+additional hand-crafted features are appended.
 """
 
 # --- file: feature_extraction.py ---
@@ -38,23 +36,13 @@ def _lag1_autocorr(x: np.ndarray) -> float:
 
 
 def msgvt_stats_for_series(x: np.ndarray, use_wavelet: bool = True) -> np.ndarray:
-    """Return statistics for a single series.
-
-    Besides the classical MSGVT features, this function appends:
-    - Energy of each wavelet coefficient band
-    - Rolling-window stats (std of rolling mean, mean of rolling std)
-    """
+    """Return the six MSGVT statistics for a single series."""
 
     if use_wavelet:
         coeffs = pywt.wavedec(x, 'db4', level=min(4, int(np.log2(max(2, x.size)))))
-        # concatenate all coeffs to build a surrogate signal for global stats
-        ww = np.concatenate([c.ravel() for c in coeffs])
-        sig = ww
-        # wavelet band energies
-        energies = [float(np.mean(c ** 2)) for c in coeffs]
+        sig = np.concatenate([c.ravel() for c in coeffs])
     else:
         sig = x
-        energies = []
 
     ent = _entropy_from_signal(sig)
     mean = float(np.nanmean(sig))
@@ -65,18 +53,7 @@ def msgvt_stats_for_series(x: np.ndarray, use_wavelet: bool = True) -> np.ndarra
     corr = _lag1_autocorr(sig)
     contrast = float(np.nanstd(sig, ddof=1)) if sig.size > 1 else 0.0
 
-    # rolling-window statistics on original signal (window=5)
-    w = 5
-    if x.size >= w:
-        roll_mean = np.convolve(x, np.ones(w) / w, mode='valid')
-        roll_std = np.array([np.std(x[i:i+w]) for i in range(x.size - w + 1)])
-        roll_mean_std = float(np.std(roll_mean))
-        roll_std_mean = float(np.mean(roll_std))
-    else:
-        roll_mean_std = 0.0
-        roll_std_mean = 0.0
-
-    feats = np.array([ent, mean, var, kur, corr, contrast, *energies, roll_mean_std, roll_std_mean], dtype=float)
+    feats = np.array([ent, mean, var, kur, corr, contrast], dtype=float)
     return np.nan_to_num(feats, nan=0.0, posinf=0.0, neginf=0.0)
 
 

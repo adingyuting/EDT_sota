@@ -26,7 +26,6 @@ def main():
     parser.add_argument('--k', type=int, default=5)
     parser.add_argument('--target-ratio', type=float, default=0.7,
                         help='Desired minority/majority ratio after RN-SMOTE')
-    parser.add_argument('--rlkf', action='store_true', help='Apply RLKF cleanup')
     parser.add_argument('--process-var', type=float, default=0.05)
     parser.add_argument('--obs-var', type=float, default=0.1)
     parser.add_argument('--use-wavelet', action='store_true', help='Use wavelet in MSGVT stats')
@@ -36,10 +35,6 @@ def main():
     parser.add_argument('--patience', type=int, default=20)
     parser.add_argument('--lambda-task', type=float, default=1e-4)
     parser.add_argument('--lambda-bg', type=float, default=1e-5)
-    parser.add_argument('--dropout', type=float, default=0.3,
-                        help='Dropout rate for IGANN subnets')
-    parser.add_argument('--weight-decay', type=float, default=1e-4,
-                        help='Weight decay (AdamW)')
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -54,8 +49,13 @@ def main():
     for tr_ratio in train_ratios:
         print(f"\n==== Train ratio {tr_ratio:.1f} ====")
         test_size = 1.0 - tr_ratio
-        X_tr_raw, X_te_raw, y_tr, y_te = stratified_split(
+        X_train_full, X_te_raw, y_train_full, y_te = stratified_split(
             X, y, test_size=test_size, random_state=args.seed
+        )
+
+        # hold out validation from training portion
+        X_tr_raw, X_val_raw, y_tr, y_val = stratified_split(
+            X_train_full, y_train_full, test_size=0.2, random_state=args.seed
         )
 
         pos_rate = float((y_tr == 1).mean())
@@ -64,41 +64,38 @@ def main():
                 print(f"Positive rate {pos_rate:.3f} <0.2; applying RN-SMOTE automatically")
             else:
                 print("Applying RN-SMOTE...")
-            Xb, yb = apply_rn_smote(
+            X_tr_bal, y_tr_bal = apply_rn_smote(
                 X_tr_raw, y_tr, minority_label=1, k=args.k,
                 drop_frac=args.drop_frac, target_ratio=args.target_ratio,
                 random_state=args.seed
             )
         else:
             print("Skipping RN-SMOTE...")
-            Xb, yb = X_tr_raw, y_tr
+            X_tr_bal, y_tr_bal = X_tr_raw, y_tr
 
-        if args.rlkf:
-            print("Applying RLKF cleanup...")
-            Xb = apply_rlkf(Xb, process_var=args.process_var, obs_var=args.obs_var)
-            X_te_proc = apply_rlkf(X_te_raw, process_var=args.process_var, obs_var=args.obs_var)
-        else:
-            print("Skipping RLKF cleanup...")
-            X_te_proc = X_te_raw
+        print("Applying RLKF cleanup...")
+        X_tr_proc = apply_rlkf(X_tr_bal, process_var=args.process_var, obs_var=args.obs_var)
+        X_val_proc = apply_rlkf(X_val_raw, process_var=args.process_var, obs_var=args.obs_var)
+        X_te_proc  = apply_rlkf(X_te_raw,  process_var=args.process_var, obs_var=args.obs_var)
 
         print("Extracting MSGVT features...")
-        X_tr_feat = extract_msgvt_features(Xb, use_wavelet=args.use_wavelet)
-        X_te_feat = extract_msgvt_features(X_te_proc, use_wavelet=args.use_wavelet)
+        X_tr_feat = extract_msgvt_features(X_tr_proc, use_wavelet=args.use_wavelet)
+        X_val_feat = extract_msgvt_features(X_val_proc, use_wavelet=args.use_wavelet)
+        X_te_feat  = extract_msgvt_features(X_te_proc,  use_wavelet=args.use_wavelet)
 
         print("Normalizing features...")
         mu = X_tr_feat.mean(axis=0)
         sigma = X_tr_feat.std(axis=0) + 1e-12
         X_trn = (X_tr_feat - mu) / sigma
-        X_ten = (X_te_feat - mu) / sigma
+        X_valn = (X_val_feat - mu) / sigma
+        X_ten  = (X_te_feat  - mu) / sigma
 
         print("Training IGANN model...")
         model, metrics = train_igann(
-            X_trn, yb, X_ten, y_te,
+            X_trn, y_tr_bal, X_valn, y_val, X_ten, y_te,
             lr=args.lr, max_epochs=args.epochs, hidden=args.hidden,
-            dropout=args.dropout,
             lambda_task=args.lambda_task, lambda_bg=args.lambda_bg,
-            patience=args.patience, seed=args.seed,
-            weight_decay=args.weight_decay
+            patience=args.patience, seed=args.seed
         )
 
         print("=== Best Metrics (Test) ===")

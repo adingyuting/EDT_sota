@@ -57,9 +57,10 @@ def sboa_optimize(
 
     def evaluate(ind):
         lam_task, lam_bg = float(ind[0]), float(ind[1])
-        model = train_igann(X_tr, y_tr, X_val, y_val,
-                            lr=lr, max_epochs=max_epochs, hidden=hidden,
-                            lambda_task=lam_task, lambda_bg=lam_bg, patience=patience, seed=seed)
+        model, _ = train_igann(X_tr, y_tr, X_val, y_val, X_val, y_val,
+                               lr=lr, max_epochs=max_epochs, hidden=hidden,
+                               lambda_task=lam_task, lambda_bg=lam_bg,
+                               patience=patience, seed=seed)
         from igann_model import predict_proba
         proba = predict_proba(model, X_val)
         y_pred = (proba >= 0.5).astype(int)
