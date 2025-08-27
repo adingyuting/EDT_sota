@@ -90,6 +90,8 @@ def mean_average_precision(rs):
 def train_igann(
     X_train: np.ndarray,
     y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
     X_test: np.ndarray,
     y_test: np.ndarray,
     lr: float = 1e-3,
@@ -105,7 +107,8 @@ def train_igann(
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     X_train = np.nan_to_num(X_train, nan=0.0, posinf=0.0, neginf=0.0)
-    X_test = np.nan_to_num(X_test, nan=0.0, posinf=0.0, neginf=0.0)
+    X_val   = np.nan_to_num(X_val,   nan=0.0, posinf=0.0, neginf=0.0)
+    X_test  = np.nan_to_num(X_test,  nan=0.0, posinf=0.0, neginf=0.0)
 
     model = IGANN(n_features=X_train.shape[1], hidden=hidden).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
@@ -119,13 +122,14 @@ def train_igann(
     pos_weight = torch.tensor([pw], dtype=torch.float32, device=device)
 
     train_ds = TensorDataset(torch.from_numpy(X_train).float(), torch.from_numpy(y_train).float())
+    val_ds   = TensorDataset(torch.from_numpy(X_val).float(),   torch.from_numpy(y_val).float())
     test_ds  = TensorDataset(torch.from_numpy(X_test).float(),  torch.from_numpy(y_test).float())
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
     test_loader  = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
     best_auc = -1.0
     best_state = None
-    best_metrics = {}
     wait = 0
 
     print("[IGANN] Start training...")
@@ -146,6 +150,7 @@ def train_igann(
 
         model.eval()
         with torch.no_grad():
+            # training AUC for monitoring
             tr_scores, tr_labels = [], []
             for xb, yb in train_loader:
                 xb = xb.to(device)
@@ -156,34 +161,35 @@ def train_igann(
             y_train_true = np.concatenate(tr_labels)
             train_auc = roc_auc_score(y_train_true, y_train_score)
 
-            scores, labels = [], []
-            for xb, yb in test_loader:
+            # validation metrics for early stopping
+            val_scores, val_labels = [], []
+            for xb, yb in val_loader:
                 xb = xb.to(device)
                 proba = torch.sigmoid(model(xb)).cpu().numpy()
-                scores.append(proba)
-                labels.append(yb.numpy().astype(int))
-            y_score = np.concatenate(scores)
-            y_true = np.concatenate(labels)
-            p_arr, r_arr, thr_arr = precision_recall_curve(y_true, y_score)
+                val_scores.append(proba)
+                val_labels.append(yb.numpy().astype(int))
+            y_val_score = np.concatenate(val_scores)
+            y_val_true = np.concatenate(val_labels)
+            p_arr, r_arr, thr_arr = precision_recall_curve(y_val_true, y_val_score)
             f1_arr = 2 * p_arr * r_arr / (p_arr + r_arr + 1e-12)
             idx = f1_arr.argmax()
-            best_thr = thr_arr[idx] if idx < len(thr_arr) else 0.5
-            y_pred = (y_score >= best_thr).astype(int)
+            val_thr = thr_arr[idx] if idx < len(thr_arr) else 0.5
+            y_val_pred = (y_val_score >= val_thr).astype(int)
 
-            TP = np.sum((y_pred == 1) & (y_true == 1))
-            FP = np.sum((y_pred == 1) & (y_true == 0))
-            FN = np.sum((y_pred == 0) & (y_true == 1))
-            TN = np.sum((y_pred == 0) & (y_true == 0))
+            TP = np.sum((y_val_pred == 1) & (y_val_true == 1))
+            FP = np.sum((y_val_pred == 1) & (y_val_true == 0))
+            FN = np.sum((y_val_pred == 0) & (y_val_true == 1))
+            TN = np.sum((y_val_pred == 0) & (y_val_true == 0))
             eps = 1e-12
             acc = (TP + TN) / (TP + TN + FP + FN + eps)
             prec = TP / (TP + FP + eps)
             rec = TP / (TP + FN + eps)
             fpr = FP / (FP + TN + eps)
             f1 = 2 * prec * rec / (prec + rec + eps)
-            auc = roc_auc_score(y_true, y_score)
+            val_auc = roc_auc_score(y_val_true, y_val_score)
 
-            temp = pd.DataFrame({'label_0': y_true, 'label_1': 1 - y_true,
-                                 'preds_0': y_score, 'preds_1': 1 - y_score})
+            temp = pd.DataFrame({'label_0': y_val_true, 'label_1': 1 - y_val_true,
+                                 'preds_0': y_val_score, 'preds_1': 1 - y_val_score})
             map40 = mean_average_precision([
                 list(temp.sort_values(by='preds_0', ascending=False).label_0[:40]),
                 list(temp.sort_values(by='preds_1', ascending=False).label_1[:40])
@@ -192,33 +198,67 @@ def train_igann(
         avg_loss = total_loss / max(1, len(train_loader))
         print(
             f"Epoch {epoch+1:02d} - loss: {avg_loss:.4f} "
-            f"- train_auc: {train_auc:.4f} - val_auc: {auc:.4f}"
+            f"- train_auc: {train_auc:.4f} - val_auc: {val_auc:.4f}"
         )
 
-        if auc > best_auc:
-            best_auc = auc
+        if val_auc > best_auc:
+            best_auc = val_auc
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-            best_metrics = {
-                'threshold': float(best_thr),
-                'acc': float(acc),
-                'prec': float(prec),
-                'rec': float(rec),
-                'fpr': float(fpr),
-                'map40': float(map40),
-                'auc': float(auc),
-                'f1': float(f1),
-            }
+            best_thr = float(val_thr)
             wait = 0
         else:
             wait += 1
             if wait >= patience:
                 print("Early stopping triggered.")
                 break
-        scheduler.step(auc)
+        scheduler.step(val_auc)
 
     if best_state is not None:
         model.load_state_dict(best_state)
-    print(f"[IGANN] Training complete. Best Test AUC: {best_auc:.4f}")
+
+    # Use validation-derived threshold to evaluate on test set
+    with torch.no_grad():
+        test_scores, test_labels = [], []
+        for xb, yb in test_loader:
+            xb = xb.to(device)
+            proba = torch.sigmoid(model(xb)).cpu().numpy()
+            test_scores.append(proba)
+            test_labels.append(yb.numpy().astype(int))
+        y_score = np.concatenate(test_scores)
+        y_true = np.concatenate(test_labels)
+        y_pred = (y_score >= best_thr).astype(int)
+
+        TP = np.sum((y_pred == 1) & (y_true == 1))
+        FP = np.sum((y_pred == 1) & (y_true == 0))
+        FN = np.sum((y_pred == 0) & (y_true == 1))
+        TN = np.sum((y_pred == 0) & (y_true == 0))
+        eps = 1e-12
+        acc = (TP + TN) / (TP + TN + FP + FN + eps)
+        prec = TP / (TP + FP + eps)
+        rec = TP / (TP + FN + eps)
+        fpr = FP / (FP + TN + eps)
+        f1 = 2 * prec * rec / (prec + rec + eps)
+        auc = roc_auc_score(y_true, y_score)
+
+        temp = pd.DataFrame({'label_0': y_true, 'label_1': 1 - y_true,
+                             'preds_0': y_score, 'preds_1': 1 - y_score})
+        map40 = mean_average_precision([
+            list(temp.sort_values(by='preds_0', ascending=False).label_0[:40]),
+            list(temp.sort_values(by='preds_1', ascending=False).label_1[:40])
+        ])
+
+    best_metrics = {
+        'threshold': float(best_thr),
+        'acc': float(acc),
+        'prec': float(prec),
+        'rec': float(rec),
+        'fpr': float(fpr),
+        'map40': float(map40),
+        'auc': float(auc),
+        'f1': float(f1),
+    }
+
+    print(f"[IGANN] Training complete. Best Val AUC: {best_auc:.4f}")
     return model, best_metrics
 
 
