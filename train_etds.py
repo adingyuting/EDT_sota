@@ -68,8 +68,7 @@ def train_binary_sgcc(
     # 8) Evaluate
     prob = model.predict(Xte, batch_size=batch_size, verbose=0)
     y_prob = prob[:, 1]
-    y_pred = (y_prob >= 0.5).astype(int)
-    met = binary_metrics(yte, y_prob, y_pred)
+    met = binary_metrics(yte, y_prob)
     met["ElapsedTime_sec"] = float(train_time)
 
     # 9) Save
