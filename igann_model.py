@@ -14,7 +14,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
-from sklearn.metrics import f1_score, roc_auc_score
+from sklearn.metrics import precision_recall_curve, roc_auc_score
+import pandas as pd
 
 
 def set_seed(seed: int = 42):
@@ -66,11 +67,31 @@ def _l2_subnets(model: IGANN) -> torch.Tensor:
     return reg
 
 
+def precision_at_k(r, k):
+    assert k >= 1
+    r = np.asarray(r)[:k] != 0
+    if r.size != k:
+        raise ValueError('Relevance score length < k')
+    return np.mean(r)
+
+
+def average_precision(r):
+    r = np.asarray(r) != 0
+    out = [precision_at_k(r, k + 1) for k in range(r.size) if r[k]]
+    if not out:
+        return 0.0
+    return np.mean(out)
+
+
+def mean_average_precision(rs):
+    return np.mean([average_precision(r) for r in rs])
+
+
 def train_igann(
     X_train: np.ndarray,
     y_train: np.ndarray,
-    X_val: np.ndarray,
-    y_val: np.ndarray,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
     lr: float = 1e-3,
     max_epochs: int = 200,
     batch_size: int = 128,
@@ -83,29 +104,25 @@ def train_igann(
     set_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # Sanitize inputs to avoid NaNs during loss computation
     X_train = np.nan_to_num(X_train, nan=0.0, posinf=0.0, neginf=0.0)
-    X_val = np.nan_to_num(X_val, nan=0.0, posinf=0.0, neginf=0.0)
+    X_test = np.nan_to_num(X_test, nan=0.0, posinf=0.0, neginf=0.0)
 
     model = IGANN(n_features=X_train.shape[1], hidden=hidden).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
 
-    # ========= 关键：按训练集类比计算 pos_weight =========
     n_pos = float((y_train == 1).sum())
     n_neg = float((y_train == 0).sum())
-    # 避免除零 & 过大；经验上 cap 到 [1, 50]
     pw = max(1.0, min(50.0, (n_neg + 1e-6) / (n_pos + 1e-6)))
     pos_weight = torch.tensor([pw], dtype=torch.float32, device=device)
 
     train_ds = TensorDataset(torch.from_numpy(X_train).float(), torch.from_numpy(y_train).float())
-    val_ds   = TensorDataset(torch.from_numpy(X_val).float(),   torch.from_numpy(y_val).float())
+    test_ds  = TensorDataset(torch.from_numpy(X_test).float(),  torch.from_numpy(y_test).float())
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-    val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+    test_loader  = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
     best_f1 = -1.0
-    best_auc = -1.0
     best_state = None
-    best_th = 0.5
+    best_metrics = {}
     wait = 0
 
     print("[IGANN] Start training...")
@@ -115,7 +132,6 @@ def train_igann(
         for xb, yb in train_loader:
             xb, yb = xb.to(device), yb.to(device)
             logits = model(xb)
-            # ====== 关键：带 pos_weight 的 BCE ======
             loss_bce = F.binary_cross_entropy_with_logits(logits, yb, pos_weight=pos_weight)
             reg_l1 = lambda_task * _l1_linear(model.linear_a)
             reg_l2 = lambda_bg * _l2_subnets(model)
@@ -125,40 +141,60 @@ def train_igann(
             opt.step()
             total_loss += loss.item()
 
-        # 验证：扫描不同阈值寻找最佳 F1 作为早停指标
         model.eval()
         with torch.no_grad():
             scores, labels = [], []
-            for xb, yb in val_loader:
+            for xb, yb in test_loader:
                 xb = xb.to(device)
                 proba = torch.sigmoid(model(xb)).cpu().numpy()
                 scores.append(proba)
                 labels.append(yb.numpy().astype(int))
             y_score = np.concatenate(scores)
             y_true = np.concatenate(labels)
-            f1 = -1.0
-            epoch_th = 0.5
-            for th in np.linspace(0.05, 0.95, 19):
-                pred = (y_score >= th).astype(int)
-                f1_tmp = f1_score(y_true, pred, zero_division=0)
-                if f1_tmp > f1:
-                    f1 = f1_tmp
-                    epoch_th = th
-            try:
-                auc = roc_auc_score(y_true, y_score)
-            except Exception:
-                auc = float('nan')
+            p_arr, r_arr, thr_arr = precision_recall_curve(y_true, y_score)
+            f1_arr = 2 * p_arr * r_arr / (p_arr + r_arr + 1e-12)
+            idx = f1_arr.argmax()
+            best_thr = thr_arr[idx] if idx < len(thr_arr) else 0.5
+            y_pred = (y_score >= best_thr).astype(int)
+
+            TP = np.sum((y_pred == 1) & (y_true == 1))
+            FP = np.sum((y_pred == 1) & (y_true == 0))
+            FN = np.sum((y_pred == 0) & (y_true == 1))
+            TN = np.sum((y_pred == 0) & (y_true == 0))
+            eps = 1e-12
+            acc = (TP + TN) / (TP + TN + FP + FN + eps)
+            prec = TP / (TP + FP + eps)
+            rec = TP / (TP + FN + eps)
+            fpr = FP / (FP + TN + eps)
+            f1 = 2 * prec * rec / (prec + rec + eps)
+            auc = roc_auc_score(y_true, y_score)
+
+            temp = pd.DataFrame({'label_0': y_true, 'label_1': 1 - y_true,
+                                 'preds_0': y_score, 'preds_1': 1 - y_score})
+            map40 = mean_average_precision([
+                list(temp.sort_values(by='preds_0', ascending=False).label_0[:40]),
+                list(temp.sort_values(by='preds_1', ascending=False).label_1[:40])
+            ])
 
         avg_loss = total_loss / max(1, len(train_loader))
         print(
-            f"Epoch {epoch+1}/{max_epochs} - loss: {avg_loss:.4f} - val_f1: {f1:.4f} - val_auc: {auc:.4f} at th={epoch_th:.2f}"
+            f"Epoch {epoch+1:02d} | Thr={best_thr:.3f} | ACC={acc:.4f}  PRE={prec:.4f}  RE={rec:.4f}  "
+            f"FPR={fpr:.4f}  map40={map40:.4f}  AUC={auc:.4f}  F1={f1:.4f}"
         )
 
-        if auc > best_auc:
-            best_auc = auc
+        if f1 > best_f1:
             best_f1 = f1
-            best_th = epoch_th
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            best_metrics = {
+                'threshold': float(best_thr),
+                'acc': float(acc),
+                'prec': float(prec),
+                'rec': float(rec),
+                'fpr': float(fpr),
+                'map40': float(map40),
+                'auc': float(auc),
+                'f1': float(f1),
+            }
             wait = 0
         else:
             wait += 1
@@ -169,9 +205,9 @@ def train_igann(
     if best_state is not None:
         model.load_state_dict(best_state)
     print(
-        f"[IGANN] Training complete. Best val AUC: {best_auc:.4f} (F1={best_f1:.4f}) at th={best_th:.2f}"
+        f"[IGANN] Training complete. Best Test F1: {best_f1:.4f} at Thr={best_metrics.get('threshold', 0.5):.2f}"
     )
-    return model
+    return model, best_metrics
 
 
 
