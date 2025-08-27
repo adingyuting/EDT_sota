@@ -49,12 +49,8 @@ def main():
     for tr_ratio in train_ratios:
         print(f"\n==== Train ratio {tr_ratio:.1f} ====")
         test_size = 1.0 - tr_ratio
-        X_train_full, X_te_raw, y_train_full, y_te = stratified_split(
+        X_tr_raw, X_te_raw, y_tr, y_te = stratified_split(
             X, y, test_size=test_size, random_state=args.seed
-        )
-        # hold out 20% of the training portion for validation
-        X_tr_raw, X_val_raw, y_tr, y_val = stratified_split(
-            X_train_full, y_train_full, test_size=0.2, random_state=args.seed
         )
 
         pos_rate = float((y_tr == 1).mean())
@@ -75,28 +71,24 @@ def main():
         if args.rlkf:
             print("Applying RLKF cleanup...")
             Xb = apply_rlkf(Xb, process_var=args.process_var, obs_var=args.obs_var)
-            X_val_proc = apply_rlkf(X_val_raw, process_var=args.process_var, obs_var=args.obs_var)
             X_te_proc = apply_rlkf(X_te_raw, process_var=args.process_var, obs_var=args.obs_var)
         else:
             print("Skipping RLKF cleanup...")
-            X_val_proc = X_val_raw
             X_te_proc = X_te_raw
 
         print("Extracting MSGVT features...")
         X_tr_feat = extract_msgvt_features(Xb, use_wavelet=args.use_wavelet)
-        X_val_feat = extract_msgvt_features(X_val_proc, use_wavelet=args.use_wavelet)
         X_te_feat = extract_msgvt_features(X_te_proc, use_wavelet=args.use_wavelet)
 
         print("Normalizing features...")
         mu = X_tr_feat.mean(axis=0)
         sigma = X_tr_feat.std(axis=0) + 1e-12
         X_trn = (X_tr_feat - mu) / sigma
-        X_valn = (X_val_feat - mu) / sigma
         X_ten = (X_te_feat - mu) / sigma
 
         print("Training IGANN model...")
         model, metrics = train_igann(
-            X_trn, yb, X_valn, y_val, X_ten, y_te,
+            X_trn, yb, X_ten, y_te,
             lr=args.lr, max_epochs=args.epochs, hidden=args.hidden,
             lambda_task=args.lambda_task, lambda_bg=args.lambda_bg,
             patience=args.patience, seed=args.seed
