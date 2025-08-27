@@ -53,10 +53,15 @@ def main():
             X, y, test_size=test_size, random_state=args.seed
         )
 
-        # hold out validation from training portion
+        # hold out validation from raw training portion
         X_tr_raw, X_val_raw, y_tr, y_val = stratified_split(
             X_train_full, y_train_full, test_size=0.2, random_state=args.seed
         )
+
+        print("Applying RLKF cleanup...")
+        X_tr_proc = apply_rlkf(X_tr_raw, process_var=args.process_var, obs_var=args.obs_var)
+        X_val_proc = apply_rlkf(X_val_raw, process_var=args.process_var, obs_var=args.obs_var)
+        X_te_proc  = apply_rlkf(X_te_raw,  process_var=args.process_var, obs_var=args.obs_var)
 
         pos_rate = float((y_tr == 1).mean())
         if args.balance or pos_rate < 0.2:
@@ -65,21 +70,16 @@ def main():
             else:
                 print("Applying RN-SMOTE...")
             X_tr_bal, y_tr_bal = apply_rn_smote(
-                X_tr_raw, y_tr, minority_label=1, k=args.k,
+                X_tr_proc, y_tr, minority_label=1, k=args.k,
                 drop_frac=args.drop_frac, target_ratio=args.target_ratio,
                 random_state=args.seed
             )
         else:
             print("Skipping RN-SMOTE...")
-            X_tr_bal, y_tr_bal = X_tr_raw, y_tr
-
-        print("Applying RLKF cleanup...")
-        X_tr_proc = apply_rlkf(X_tr_bal, process_var=args.process_var, obs_var=args.obs_var)
-        X_val_proc = apply_rlkf(X_val_raw, process_var=args.process_var, obs_var=args.obs_var)
-        X_te_proc  = apply_rlkf(X_te_raw,  process_var=args.process_var, obs_var=args.obs_var)
+            X_tr_bal, y_tr_bal = X_tr_proc, y_tr
 
         print("Extracting MSGVT features...")
-        X_tr_feat = extract_msgvt_features(X_tr_proc, use_wavelet=args.use_wavelet)
+        X_tr_feat = extract_msgvt_features(X_tr_bal, use_wavelet=args.use_wavelet)
         X_val_feat = extract_msgvt_features(X_val_proc, use_wavelet=args.use_wavelet)
         X_te_feat  = extract_msgvt_features(X_te_proc,  use_wavelet=args.use_wavelet)
 
