@@ -109,6 +109,9 @@ def train_igann(
 
     model = IGANN(n_features=X_train.shape[1], hidden=hidden).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        opt, mode='max', factor=0.5, patience=5, min_lr=1e-5
+    )
 
     n_pos = float((y_train == 1).sum())
     n_neg = float((y_train == 0).sum())
@@ -143,6 +146,16 @@ def train_igann(
 
         model.eval()
         with torch.no_grad():
+            tr_scores, tr_labels = [], []
+            for xb, yb in train_loader:
+                xb = xb.to(device)
+                proba = torch.sigmoid(model(xb)).cpu().numpy()
+                tr_scores.append(proba)
+                tr_labels.append(yb.numpy().astype(int))
+            y_train_score = np.concatenate(tr_scores)
+            y_train_true = np.concatenate(tr_labels)
+            train_auc = roc_auc_score(y_train_true, y_train_score)
+
             scores, labels = [], []
             for xb, yb in test_loader:
                 xb = xb.to(device)
@@ -177,7 +190,10 @@ def train_igann(
             ])
 
         avg_loss = total_loss / max(1, len(train_loader))
-        print(f"Epoch {epoch+1:02d} - loss: {avg_loss:.4f} - val_auc: {auc:.4f}")
+        print(
+            f"Epoch {epoch+1:02d} - loss: {avg_loss:.4f} "
+            f"- train_auc: {train_auc:.4f} - val_auc: {auc:.4f}"
+        )
 
         if auc > best_auc:
             best_auc = auc
@@ -198,6 +214,7 @@ def train_igann(
             if wait >= patience:
                 print("Early stopping triggered.")
                 break
+        scheduler.step(auc)
 
     if best_state is not None:
         model.load_state_dict(best_state)
