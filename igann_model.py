@@ -120,7 +120,7 @@ def train_igann(
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     test_loader  = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
-    best_f1 = -1.0
+    best_auc = -1.0
     best_state = None
     best_metrics = {}
     wait = 0
@@ -177,13 +177,10 @@ def train_igann(
             ])
 
         avg_loss = total_loss / max(1, len(train_loader))
-        print(
-            f"Epoch {epoch+1:02d} | Thr={best_thr:.3f} | ACC={acc:.4f}  PRE={prec:.4f}  RE={rec:.4f}  "
-            f"FPR={fpr:.4f}  map40={map40:.4f}  AUC={auc:.4f}  F1={f1:.4f}"
-        )
+        print(f"Epoch {epoch+1:02d} - loss: {avg_loss:.4f} - val_auc: {auc:.4f}")
 
-        if f1 > best_f1:
-            best_f1 = f1
+        if auc > best_auc:
+            best_auc = auc
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             best_metrics = {
                 'threshold': float(best_thr),
@@ -204,9 +201,7 @@ def train_igann(
 
     if best_state is not None:
         model.load_state_dict(best_state)
-    print(
-        f"[IGANN] Training complete. Best Test F1: {best_f1:.4f} at Thr={best_metrics.get('threshold', 0.5):.2f}"
-    )
+    print(f"[IGANN] Training complete. Best Test AUC: {best_auc:.4f}")
     return model, best_metrics
 
 
