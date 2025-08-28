@@ -18,6 +18,12 @@ class RegularizedAttention(layers.Layer):
         # input_shape: (batch, T, M)
         T = input_shape[1]
         M = input_shape[2]
+        # Precreate temporal convolution and projection layers to avoid
+        # dynamic variable creation inside `call`, which is disallowed when
+        # the layer is wrapped with `tf.function`.
+        self.temporal_conv = layers.Conv1D(
+            self.attn_units, kernel_size=3, padding="same", activation="tanh"
+        )
         self.proj_h = layers.Dense(self.attn_units, activation="tanh")
         self.proj_x = layers.Dense(self.attn_units, activation="tanh")
         self.score = layers.Dense(1)  # scalar per time-feature after broadcasting
@@ -29,8 +35,10 @@ class RegularizedAttention(layers.Layer):
         T = inputs.shape[1]
         M = inputs.shape[2]
 
-        # Create a simple temporal encoding via a 1D conv as a proxy for hidden features h_t
-        h = layers.Conv1D(self.attn_units, kernel_size=3, padding="same", activation="tanh")(inputs)
+        # Create a simple temporal encoding via a 1D conv as a proxy for hidden
+        # features h_t. The convolutional layer is created in `build` and reused
+        # for every call.
+        h = self.temporal_conv(inputs)
         # Project both streams
         Hp = self.proj_h(h)                           # (B, T, U)
         Xp = self.proj_x(inputs)                      # (B, T, U)
