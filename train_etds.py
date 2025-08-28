@@ -89,7 +89,7 @@ def train_binary_sgcc(
 
     print("[8/9] Evaluating on test set ...")
     prob = model.predict(Xte, batch_size=batch_size, verbose=0)
-    y_prob = prob[:, 1]
+    y_prob = prob[:, 0]
     met = binary_metrics(yte, y_prob)
     met["ElapsedTime_sec"] = float(train_time)
 

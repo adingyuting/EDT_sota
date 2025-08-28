@@ -71,12 +71,12 @@ def binary_metrics(y_true: np.ndarray, y_prob: np.ndarray, top_k: int = 40) -> D
     fpr = FP / (FP + TN + eps)
     f1 = 2 * prec * rec / (prec + rec + eps)
 
-    # 4) MAP@K over both classes
+    # 4) MAP@K over both classes following original implementation
     temp = pd.DataFrame({
-        "label_0": 1 - y_true,
-        "label_1": y_true,
-        "preds_0": 1 - y_prob,
-        "preds_1": y_prob,
+        "label_0": y_true,
+        "label_1": 1 - y_true,
+        "preds_0": y_prob,
+        "preds_1": 1 - y_prob,
     })
     mapk = mean_average_precision([
         list(temp.sort_values(by="preds_0", ascending=False).label_0[:top_k]),
@@ -113,7 +113,11 @@ class BinaryMetricsCallback(tf.keras.callbacks.Callback):
     def on_epoch_end(self, epoch, logs=None):
         self.epoch += 1
         X_val, y_val = self.val_data
-        y_prob = self.model.predict(X_val, verbose=0)[:, 1]
+        # Support both single-array and list/tuple inputs
+        if isinstance(X_val, (list, tuple)):
+            y_prob = self.model.predict(X_val, verbose=0)[:, 0]
+        else:
+            y_prob = self.model.predict(X_val, verbose=0)[:, 0]
         met = binary_metrics(y_val, y_prob, top_k=self.top_k)
         print(
             f"Epoch {self.epoch:02d} | Thr={met['Thr']:.3f} | "
