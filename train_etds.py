@@ -18,7 +18,7 @@ def set_seed(seed: int = 42):
     import random
     random.seed(seed)
     np.random.seed(seed)
-    tf.set_random_seed(seed)
+    tf.random.set_seed(seed)
 
 def train_binary_sgcc(
     feature_csv: str,

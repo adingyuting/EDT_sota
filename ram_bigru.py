@@ -49,7 +49,8 @@ class RegularizedAttention(layers.Layer):
         # Regularization: Q Q^T - I, where Q is (M, T) averaged over batch
         Q = tf.reduce_mean(omega, axis=0)                   # (M, T)
         QQT = tf.matmul(Q, Q, transpose_b=True)             # (M, M)
-        I = tf.eye(self.M, dtype=QQT.dtype)
+        M = tf.shape(QQT)[0]
+        I = tf.eye(M, dtype=QQT.dtype)
         frob = tf.reduce_sum(tf.square(QQT - I))
         self.add_loss(self.reg_weight * frob)
 
