@@ -12,8 +12,8 @@ def load_sgcc_csv(feature_csv: str, label_csv: str) -> Tuple[np.ndarray, np.ndar
         X: (N, T) float32
         y: (N,) int64
     """
-    X = pd.read_csv('/home/EDT_MODEL/features.csv').values.astype(np.float32)
-    y_raw = pd.read_csv('/home/EDT_MODEL/labels.csv',header=None).values.squeeze()
+    X = pd.read_csv(feature_csv).values.astype(np.float32)
+    y_raw = pd.read_csv(label_csv, header=None).values.squeeze()
     y = y_raw.astype(np.int64)
     return X, y
 

@@ -21,10 +21,10 @@ class RegularizedAttention(layers.Layer):
         self.M = int(input_shape[2])
         # temporal encoding branch
         self.conv = layers.Conv1D(
-            self.attn_units, kernel_size=3, padding="same", activation="tanh"
+            self.attn_units, kernel_size=3, padding="same", activation="relu"
         )
-        self.proj_h = layers.Dense(self.attn_units, activation="tanh")
-        self.proj_x = layers.Dense(self.attn_units, activation="tanh")
+        self.proj_h = layers.Dense(self.attn_units, activation="relu")
+        self.proj_x = layers.Dense(self.attn_units, activation="relu")
         # outputs a score for each feature at each time step
         self.score = layers.Dense(self.M)
         super().build(input_shape)
@@ -37,7 +37,7 @@ class RegularizedAttention(layers.Layer):
         # Project both streams
         Hp = self.proj_h(h)                           # (B, T, U)
         Xp = self.proj_x(inputs)                      # (B, T, U)
-        HXp = tf.nn.tanh(Hp + Xp)                     # (B, T, U)
+        HXp = tf.nn.relu(Hp + Xp)                     # (B, T, U)
 
         # Compute a score for every feature at each time step
         scores = self.score(HXp)                      # (B, T, M)
@@ -54,6 +54,7 @@ class RegularizedAttention(layers.Layer):
         frob = tf.reduce_sum(tf.square(QQT - I))
         self.add_loss(self.xi * frob)
         self.add_metric(self.xi * frob, name="ram_reg")
+        tf.print("RAM regularization term:", frob)
 
         # Reweight inputs
         X_tilde = inputs * omega_t
@@ -65,12 +66,15 @@ def build_ram_bigru_model(
     n_classes: int,
     attn_units: int = 32,
     xi: float = 1e-3,
-    bigru_units: int = 64,
+    bigru_units: int = 200,
     dropout: float = 0.1,
 ):
     inp = layers.Input(shape=(T, M), name="input_sequence")
+    print("Performing RAM Attention with ReLU activation.")
     x, omega = RegularizedAttention(attn_units=attn_units, xi=xi, name="ram")(inp)
-    x = layers.Bidirectional(layers.GRU(bigru_units, return_sequences=False, dropout=dropout))(x)
+    x = layers.Bidirectional(
+        layers.GRU(bigru_units, activation="relu", return_sequences=False, dropout=dropout)
+    )(x)
     if n_classes == 2:
         out = layers.Dense(1, activation="sigmoid")(x)
     else:
