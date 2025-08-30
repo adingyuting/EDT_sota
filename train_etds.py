@@ -7,7 +7,6 @@ from data import (
     load_sgcc_csv,
     train_test_split_stratified,
     standardize_per_series,
-    make_tensor_data_from_modes,
 )
 from sldi import SLDIImputer
 from vmd_features import batch_vmd
@@ -26,9 +25,12 @@ def train_binary_sgcc(
     outdir: str,
     test_size: float = 0.3,
     vmd_K: int = 6,
+    vmd_alpha: float = 2000,
+    vmd_tau: float = 0.0,
+    vmd_tol: float = 1e-7,
     attn_units: int = 32,
     bigru_units: int = 64,
-    reg_weight: float = 1e-3,
+    xi: float = 1e-3,
     epochs: int = 100,
     batch_size: int = 64,
     lr: float = 1e-3,
@@ -49,8 +51,8 @@ def train_binary_sgcc(
     # X_imp = standardize_per_series(X_imp)
 
     print("[4/9] Extracting VMD features ...")
-    modes = batch_vmd(X_imp, K=vmd_K)    # (N, K, T)
-    X_tensor = make_tensor_data_from_modes(modes, stack=True)  # (N, T, 4)
+    modes = batch_vmd(X_imp, K=vmd_K, alpha=vmd_alpha, tau=vmd_tau, tol=vmd_tol)  # (N, K, T)
+    X_tensor = np.transpose(modes, (0, 2, 1)).astype(np.float32)  # (N, T, K)
 
     print("[5/9] Splitting train/test/validation sets ...")
     Xtr_full, Xte, ytr_full, yte = train_test_split_stratified(
@@ -64,7 +66,7 @@ def train_binary_sgcc(
     n_classes = 2
 
     print("[6/9] Building RAM-BiGRU model ...")
-    model = build_ram_bigru_model(T=T, M=M, n_classes=n_classes, attn_units=attn_units, reg_weight=reg_weight, bigru_units=bigru_units)
+    model = build_ram_bigru_model(T=T, M=M, n_classes=n_classes, attn_units=attn_units, xi=xi, bigru_units=bigru_units)
     opt = tf.keras.optimizers.Adamax(learning_rate=lr)
     loss = "binary_crossentropy" if n_classes == 2 else "sparse_categorical_crossentropy"
     model.compile(optimizer=opt, loss=loss, metrics=["accuracy"])
@@ -122,9 +124,12 @@ def main():
     parser.add_argument("--outdir", type=str, default="./outputs_sgcc")
     parser.add_argument("--test-size", type=float, default=0.3)
     parser.add_argument("--vmd-K", type=int, default=6)
+    parser.add_argument("--vmd-alpha", type=float, default=2000)
+    parser.add_argument("--vmd-tau", type=float, default=0.0)
+    parser.add_argument("--vmd-tol", type=float, default=1e-7)
     parser.add_argument("--attn-units", type=int, default=32)
     parser.add_argument("--bigru-units", type=int, default=64)
-    parser.add_argument("--reg-weight", type=float, default=1e-3)
+    parser.add_argument("--xi", type=float, default=1e-3)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -138,9 +143,12 @@ def main():
         outdir=args.outdir,
         test_size=args.test_size,
         vmd_K=args.vmd_K,
+        vmd_alpha=args.vmd_alpha,
+        vmd_tau=args.vmd_tau,
+        vmd_tol=args.vmd_tol,
         attn_units=args.attn_units,
         bigru_units=args.bigru_units,
-        reg_weight=args.reg_weight,
+        xi=args.xi,
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
