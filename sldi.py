@@ -45,7 +45,7 @@ class SLDIImputer:
             hidden = max(8, int(self.hidden_multiplier * len(obs)))
             mlp = MLPRegressor(
                 hidden_layer_sizes=(hidden,),
-                activation="relu",
+                activation="logistic",
                 solver="adam",
                 max_iter=self.max_iter,
                 random_state=self.random_state,
@@ -71,6 +71,8 @@ class SLDIImputer:
                 if np.isnan(x_in).any():
                     continue
                 y_hat = self.models[key].predict(x_in).reshape(-1)
+                # apply sigmoid to bound outputs similar to paper's σ activation
+                y_hat = 1 / (1 + np.exp(-y_hat))
                 X[i, mis] = y_hat.astype(np.float32)
         # Fallback: any remaining NaN => fill with per-feature mean
         col_mean = np.nanmean(X, axis=0)
