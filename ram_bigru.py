@@ -16,8 +16,12 @@ class RegularizedAttention(layers.Layer):
 
     def build(self, input_shape):
         # input_shape: (batch, T, M)
-        # store feature dimension for score layer
+        # store feature dimension as concrete int for later use
         self.M = int(input_shape[2])
+        # temporal encoding branch
+        self.conv = layers.Conv1D(
+            self.attn_units, kernel_size=3, padding="same", activation="tanh"
+        )
         self.proj_h = layers.Dense(self.attn_units, activation="tanh")
         self.proj_x = layers.Dense(self.attn_units, activation="tanh")
         # outputs a score for each feature at each time step
@@ -26,10 +30,9 @@ class RegularizedAttention(layers.Layer):
 
     def call(self, inputs, training=None):
         # inputs: (B, T, M)
-        M = tf.shape(inputs)[2]
 
         # Create a simple temporal encoding via a 1D conv as a proxy for hidden features h_t
-        h = layers.Conv1D(self.attn_units, kernel_size=3, padding="same", activation="tanh")(inputs)
+        h = self.conv(inputs)
         # Project both streams
         Hp = self.proj_h(h)                           # (B, T, U)
         Xp = self.proj_x(inputs)                      # (B, T, U)
@@ -46,7 +49,7 @@ class RegularizedAttention(layers.Layer):
         # Regularization: Q Q^T - I, where Q is (M, T) averaged over batch
         Q = tf.reduce_mean(omega, axis=0)                   # (M, T)
         QQT = tf.matmul(Q, Q, transpose_b=True)             # (M, M)
-        I = tf.eye(M, dtype=QQT.dtype)
+        I = tf.eye(self.M, dtype=QQT.dtype)
         frob = tf.reduce_sum(tf.square(QQT - I))
         self.add_loss(self.reg_weight * frob)
 
