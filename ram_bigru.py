@@ -16,8 +16,7 @@ class RegularizedAttention(layers.Layer):
 
     def build(self, input_shape):
         # input_shape: (batch, T, M)
-        # store sequence length and feature dimension as python ints for later use
-        self.T = int(input_shape[1])
+        # store feature dimension for score layer
         self.M = int(input_shape[2])
         self.proj_h = layers.Dense(self.attn_units, activation="tanh")
         self.proj_x = layers.Dense(self.attn_units, activation="tanh")
@@ -27,11 +26,7 @@ class RegularizedAttention(layers.Layer):
 
     def call(self, inputs, training=None):
         # inputs: (B, T, M)
-        shape = tf.shape(inputs)
-        B = shape[0]
-        T = shape[1]
-        # feature dimension is stored as python int to construct identity matrix later
-        M = self.M
+        M = tf.shape(inputs)[2]
 
         # Create a simple temporal encoding via a 1D conv as a proxy for hidden features h_t
         h = layers.Conv1D(self.attn_units, kernel_size=3, padding="same", activation="tanh")(inputs)
@@ -52,7 +47,7 @@ class RegularizedAttention(layers.Layer):
         Q = tf.reduce_mean(omega, axis=0)                   # (M, T)
         QQT = tf.matmul(Q, Q, transpose_b=True)             # (M, M)
         I = tf.eye(M, dtype=QQT.dtype)
-        frob = tf.norm(QQT - I, ord="fro", axis=[-2, -1])
+        frob = tf.reduce_sum(tf.square(QQT - I))
         self.add_loss(self.reg_weight * frob)
 
         # Reweight inputs
@@ -64,6 +59,9 @@ def build_ram_bigru_model(T: int, M: int, n_classes: int, attn_units: int = 32, 
     x, omega = RegularizedAttention(attn_units=attn_units, reg_weight=reg_weight, name="ram")(inp)
     x = layers.Bidirectional(layers.GRU(bigru_units, return_sequences=False, dropout=dropout))(x)
     x = layers.Dense(64, activation="relu")(x)
-    out = layers.Dense(n_classes, activation="softmax")(x)
+    if n_classes == 2:
+        out = layers.Dense(1, activation="sigmoid")(x)
+    else:
+        out = layers.Dense(n_classes, activation="softmax")(x)
     model = models.Model(inputs=inp, outputs=out, name="RAM_BiGRU")
     return model

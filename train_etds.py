@@ -66,7 +66,8 @@ def train_binary_sgcc(
     print("[6/9] Building RAM-BiGRU model ...")
     model = build_ram_bigru_model(T=T, M=M, n_classes=n_classes, attn_units=attn_units, reg_weight=reg_weight, bigru_units=bigru_units)
     opt = tf.keras.optimizers.Adamax(learning_rate=lr)
-    model.compile(optimizer=opt, loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+    loss = "binary_crossentropy" if n_classes == 2 else "sparse_categorical_crossentropy"
+    model.compile(optimizer=opt, loss=loss, metrics=["accuracy"])
 
     print("[7/9] Training ...")
     callbacks = [
