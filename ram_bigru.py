@@ -25,9 +25,10 @@ class RegularizedAttention(layers.Layer):
 
     def call(self, inputs, training=None):
         # inputs: (B, T, M)
-        B = tf.shape(inputs)[0]
-        T = inputs.shape[1]
-        M = inputs.shape[2]
+        shape = tf.shape(inputs)
+        B = shape[0]
+        T = shape[1]
+        M = shape[2]
 
         # Create a simple temporal encoding via a 1D conv as a proxy for hidden features h_t
         h = layers.Conv1D(self.attn_units, kernel_size=3, padding="same", activation="tanh")(inputs)
